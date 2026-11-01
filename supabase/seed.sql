@@ -1,0 +1,10 @@
+-- Local `supabase db reset` seed.
+-- AppConfig is inserted by migration 20261101163000_seed_app_config.sql
+-- so a hosted `supabase db push` gets it too. This file does not repeat that row.
+--
+-- After the first auth user exists, promote owners from the SQL editor
+-- (the postgres role), not from the app:
+--
+--   update public.profiles
+--   set role = 'owner'
+--   where email = 'you@example.com';

@@ -1,0 +1,29 @@
+# Starting point for the Supabase CLI. Migrations in supabase/migrations are the source of truth.
+# If a future CLI rejects a key here, run `supabase init` in a scratch folder and keep this migrations directory.
+project_id = "lsp-os"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:43123"
+additional_redirect_urls = ["http://127.0.0.1:43123/auth/callback"]
+jwt_expiry = 3600
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = false
