@@ -10,6 +10,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261101161000_tables.sql` | Profiles, customers, properties, units, systems, requests, visits, time, bundles, snapshots, parts, invoices, estimates, photos, config, audit. |
 | `20261101162000_rls.sql` | Row level security and write guards. |
 | `20261101163000_seed_app_config.sql` | The one AppConfig row, including US federal holidays 2026–2035. |
+| `20261102140000_board_actions.sql` | Quick Add, assign, High, status switch, My Jobs en route, and auto rules A2–A5. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
