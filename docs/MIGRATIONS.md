@@ -10,6 +10,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261101161000_tables.sql` | Profiles, customers, properties, units, systems, requests, visits, time, bundles, snapshots, parts, invoices, estimates, photos, config, audit. |
 | `20261101162000_rls.sql` | Row level security and write guards. |
 | `20261101163000_seed_app_config.sql` | The one AppConfig row, including US federal holidays 2026–2035. |
+| `20261102120000_legacy_import.sql` | Old workbook calls. Not Board cards and not invoices. Financial Pulse cannot count them. |
 | `20261102140000_board_actions.sql` | Quick Add, assign, High, status switch, My Jobs en route, and auto rules A2–A5. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
@@ -83,3 +84,4 @@ These are in the database now so M3–M5 do not have to loosen security to ship.
 - `unit_label_norm` is lowercased and trimmed. Fuller unit-number matching is still an open decision.
 - QuickBooks is a stub table, `qbo_weekly_pushes`. No push runs yet.
 - Photos store a `storage_path`. Create a private Storage bucket when the visit flow needs it. Not required for the empty Board.
+- `legacy_imports` holds the old workbook. `counts_toward_pulse` is constrained false. Crew members can read the rows. They cannot insert them. Loading the rows is `docs/IMPORT.md`.

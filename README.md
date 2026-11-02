@@ -4,7 +4,7 @@ One Board for the whole crew. Owners and techs use the same phone-first app. The
 
 This repo is the clean start. It does not continue the old `jobs` app. The spec in `docs/` wins.
 
-This build is the Board and Quick Add. Visit flow, invoicing screens, the portal, and QuickBooks are later. The database already moves a call when an invoice is drafted or sent, or when a part is ordered or in hand.
+This build is the Board and Quick Add. The price book, the two management companies, and the old call history load with `npm run import:data`. That history stays in `legacy_imports` and is not on the Board. Visit flow, invoicing screens, the portal, and QuickBooks are later. The database already moves a call when an invoice is drafted or sent, or when a part is ordered or in hand.
 
 ## Run it locally
 
@@ -20,10 +20,14 @@ Without Supabase keys, the Board is an empty preview and `/login` lists the setu
 ```bash
 npm run build
 npm run lint
+npm test
 npm run prove:rls
+npm run prove:import
 ```
 
 `prove:rls` needs local PostgreSQL. It creates a throwaway database, applies the migrations, and checks that a tech cannot approve an invoice or raise a call to High. It does not talk to a hosted Supabase project.
+
+`prove:import` loads the price book and the old history into a different throwaway database, checks the counts, and runs the import again. The second run writes nothing. It also refuses a hosted Supabase URL.
 
 ## Environment
 
@@ -34,17 +38,33 @@ Copy `.env.example` to `.env.local`.
 | `NEXT_PUBLIC_SUPABASE_URL` | Browser and server | Yes, before real sign-in |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser and server | Yes, before real sign-in |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server only, never `NEXT_PUBLIC_` | Keep it for later admin scripts. The app does not read it yet. |
+| `SUPABASE_DB_URL` | The import script only | Yes, before loading the price book. Direct connection, port 5432. |
 | `RESEND_API_KEY` | Invoice and flag-back email | No. That is the invoicing milestone. |
 | `EMAIL_FROM` | Same | No. |
 
 Vercel needs the same public Supabase variables on the preview and production environments. Creating the Vercel project and the Supabase project is a manual step.
 
-## What to create before the next milestone
+## Load the price book and the old history
 
-Price book, properties, and legacy history are already loaded. The next step on a hosted project is the Board migration, not another import.
+Do this once the database exists. The full click-path is `docs/IMPORT.md`. If the hosted project already has the price book, skip the import and apply `supabase/migrations/20261102140000_board_actions.sql` only.
 
-1. Create a Supabase project if this environment does not have one yet.
-2. Run the SQL files in `supabase/migrations` in order (SQL editor or `supabase db push`). Details are in `docs/MIGRATIONS.md`. An existing project only needs `20261102140000_board_actions.sql`.
+```bash
+npm run import:dry-run
+npm run import:data -- --commit
+```
+
+`--commit` is required when the database URL is not local. The script reads `SUPABASE_DB_URL` from the environment or from `.env.local`. Use the direct connection on port 5432.
+
+A second run does not add duplicate calls, and it does not change a price or a door code you already edited. It only fills links that were missing, such as history for a property you added later.
+
+Old calls live in `legacy_imports` and do not count toward Financial Pulse. They do not become Board cards. New calls come from Quick Add.
+
+## Standing up a new database
+
+The hosted project already has the foundation and the loaded history. Use this list only when the database is empty.
+
+1. Create a Supabase project.
+2. Run the SQL files in `supabase/migrations` in order (SQL editor or `supabase db push`). Details are in `docs/MIGRATIONS.md`. An existing project that already ran the earlier files only needs `20261102140000_board_actions.sql`.
 3. Copy the project URL and the anon key into `.env.local` and into Vercel.
 4. In Authentication, turn off public sign-up. Add each person. New users become `tech` automatically.
 5. In the SQL editor, promote the owner-technicians:
@@ -57,8 +77,11 @@ where email = 'you@example.com';
 
 6. Confirm one `app_config` row: labor `9000` cents ($90/hr), profit floor `10000` cents, burn `240000` cents per business day, timezone `America/New_York`.
 7. Create the Vercel project, set the env vars, and open the preview URL on a phone. Sign in and you should land on the Board.
+8. Load the price book and the old history. See `docs/IMPORT.md`.
 
 Not needed yet: a Resend account, a Storage bucket, a portal password, or a QuickBooks connection.
+
+Old history stays off the Board. New calls come from Quick Add. The next build is the active visit.
 
 ## Auth and roles
 
@@ -91,6 +114,7 @@ A unit with another call in the last 14 days shows **Repeat**. Open it for the d
 - `docs/ACCEPTANCE.md` — checks for later milestones
 - `docs/BUILD1_PLAN.md` — milestone order
 - `docs/MIGRATIONS.md` — how this database is shaped
+- `docs/IMPORT.md` — how to load the price book and the old history
 
 ## Stack
 

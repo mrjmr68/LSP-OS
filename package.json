@@ -8,7 +8,10 @@
     "start": "next start --hostname 0.0.0.0 --port 43123",
     "lint": "eslint",
     "test": "tsx --test lib/board-rules.test.ts",
-    "prove:rls": "bash scripts/prove-rls.sh"
+    "import:data": "node scripts/import/run-all.mjs",
+    "import:dry-run": "node scripts/import/run-all.mjs --dry-run",
+    "prove:rls": "bash scripts/prove-rls.sh",
+    "prove:import": "bash scripts/prove-import.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -29,8 +32,10 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "csv-parse": "^7.0.3",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "pg": "^8.23.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"

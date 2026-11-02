@@ -244,6 +244,7 @@ labor_rate_cents (9000), profit_per_hour_floor_cents (10000), daily_burn_cents (
 - **StatusEvent** (audit): request_id, from_status, to_status, actor_id, trigger enum `manual`,`my_jobs_tap`,`invoice_drafted`,`invoice_sent`,`parts_order_entered`,`part_in_hand`,`mark_paid`,`system`, at.
 - **OutboundMessage**: request_id, channel `sms`/`email`, to, template (`eta`,`invoice`,`estimate`,`flag_back`), body, provider_id, status, sent_at.
 - **QboWeeklyPush** (future): week_start, week_end, gross_cents, tax_cents, invoice_count, status `pending`,`pushed`,`failed`, qbo_ref, pushed_at.
+- **LegacyImport**: one row per call from the old workbook (`legacy_imports`). Not a ServiceRequest and not an InvoiceRecord. Optional links to customer, property, unit, and bundle. Money is integer cents. `counts_toward_pulse` is constrained false. Financial Pulse must not sum this table. A later import updates the links only.
 - **Payment** (optional simple): invoice_id, amount_cents, received_on, method, ref, entered_by.
 
 ## Relationships summary
