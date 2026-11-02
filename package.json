@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 43123",
     "lint": "eslint",
+    "test": "tsx --test lib/board-rules.test.ts",
     "import:data": "node scripts/import/run-all.mjs",
     "import:dry-run": "node scripts/import/run-all.mjs --dry-run",
     "prove:rls": "bash scripts/prove-rls.sh",
@@ -36,6 +37,7 @@
     "eslint-config-next": "16.4.3",
     "pg": "^8.23.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }

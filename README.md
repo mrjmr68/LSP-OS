@@ -4,7 +4,7 @@ One Board for the whole crew. Owners and techs use the same phone-first app. The
 
 This repo is the clean start. It does not continue the old `jobs` app. The spec in `docs/` wins.
 
-The app shell, sign-in, and the database are in place. The price book, the two management companies, and the old call history can be loaded with `npm run import:data`. That history is not on the Board. Visit flow, email, the portal, and QuickBooks are not in this build.
+This build is the Board and Quick Add. The price book, the two management companies, and the old call history load with `npm run import:data`. That history stays in `legacy_imports` and is not on the Board. Visit flow, invoicing screens, the portal, and QuickBooks are later. The database already moves a call when an invoice is drafted or sent, or when a part is ordered or in hand.
 
 ## Run it locally
 
@@ -20,6 +20,7 @@ Without Supabase keys, the Board is an empty preview and `/login` lists the setu
 ```bash
 npm run build
 npm run lint
+npm test
 npm run prove:rls
 npm run prove:import
 ```
@@ -45,7 +46,7 @@ Vercel needs the same public Supabase variables on the preview and production en
 
 ## Load the price book and the old history
 
-Do this once the database from the steps above exists. The full click-path is `docs/IMPORT.md`.
+Do this once the database exists. The full click-path is `docs/IMPORT.md`. If the hosted project already has the price book, skip the import and apply `supabase/migrations/20261102140000_board_actions.sql` only.
 
 ```bash
 npm run import:dry-run
@@ -56,14 +57,14 @@ npm run import:data -- --commit
 
 A second run does not add duplicate calls, and it does not change a price or a door code you already edited. It only fills links that were missing, such as history for a property you added later.
 
-The Board stays empty. Old calls live in `legacy_imports` and do not count toward Financial Pulse.
+Old calls live in `legacy_imports` and do not count toward Financial Pulse. They do not become Board cards. New calls come from Quick Add.
 
 ## Standing up a new database
 
-The hosted project already has the foundation. Use this list only when the database is empty.
+The hosted project already has the foundation and the loaded history. Use this list only when the database is empty.
 
 1. Create a Supabase project.
-2. Run the SQL files in `supabase/migrations` in order (SQL editor or `supabase db push`). Details are in `docs/MIGRATIONS.md`.
+2. Run the SQL files in `supabase/migrations` in order (SQL editor or `supabase db push`). Details are in `docs/MIGRATIONS.md`. An existing project that already ran the earlier files only needs `20261102140000_board_actions.sql`.
 3. Copy the project URL and the anon key into `.env.local` and into Vercel.
 4. In Authentication, turn off public sign-up. Add each person. New users become `tech` automatically.
 5. In the SQL editor, promote the owner-technicians:
@@ -80,7 +81,7 @@ where email = 'you@example.com';
 
 Not needed yet: a Resend account, a Storage bucket, a portal password, or a QuickBooks connection.
 
-The next build is the live Board and Quick Add. Old history stays off the Board until then.
+Old history stays off the Board. New calls come from Quick Add. The next build is the active visit.
 
 ## Auth and roles
 
@@ -92,11 +93,17 @@ Sign-in is email and password. `/auth/callback` completes invite and reset links
 
 ## Board
 
-Ten categories, in order: New, Assigned, Ready, In Progress, To Estimate, Estimate Out, Parts, Complete, Invoiced, Closed.
+Ten categories, in order: New, Assigned, Ready, In Progress, To Estimate, Estimate Out, Parts, Complete, Invoiced, Closed. Each shows a count. On a phone, an empty category stays collapsed.
 
-All jobs / My jobs is on the shell. Lists are empty until calls exist. This slice still shows every category so the shape of the Board is visible. The screen spec hides an empty category once the live Board is built.
+All jobs / My jobs is on the shell. **+ Quick Add** asks for contact, property, unit, and issue. The source defaults to phone. A unit with another call in the last 14 days shows a warning and the call is still saved. Offline saves stay on the phone and sync when the signal returns.
 
-High calls sort to the top of a category. Nothing is sent when a call is marked High.
+An owner assigns a tech, sets High (nothing is texted), switches status, or deletes a duplicate. A skipped status needs a reason. A tech does not get those controls.
+
+My jobs, then the assigned call: **Go en route** moves it to In Progress, starts travel, queues an ETA text when the contact has a phone and texts are on, and opens Google Maps. No phone still moves the call and opens Maps.
+
+A unit with another call in the last 14 days shows **Repeat**. Open it for the dates and bundle codes. That history is real service requests, not the legacy import.
+
+`npm test` checks the Board rules. `npm run prove:rls` checks them in Postgres, including auto rules A1–A5. Apply `supabase/migrations/20261102140000_board_actions.sql` on the hosted database before trying this on the live app. Do not re-run the M2 imports.
 
 ## Docs
 

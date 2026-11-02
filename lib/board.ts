@@ -13,6 +13,15 @@ export const BOARD_CATEGORIES = [
 
 export type BoardStatus = (typeof BOARD_CATEGORIES)[number]["status"]
 
+export type RepeatCall = {
+  id: string
+  displayNumber: string
+  issue: string
+  status: BoardStatus
+  whenLabel: string
+  bundleCodes: string[]
+}
+
 export type BoardCard = {
   id: string
   displayNumber: string
@@ -22,11 +31,17 @@ export type BoardCard = {
   assignedUserId: string | null
   assigneeName: string | null
   propertyName: string
+  unitId: string
   unitLabel: string
+  address: string
+  contactName: string
+  contactPhone: string | null
   sourceLabel: string
   ageLabel: string
   bumpedAtMs: number | null
   createdAtMs: number
+  repeatCalls: RepeatCall[]
+  pendingSync: boolean
 }
 
 export type BoardViewer = {
@@ -53,6 +68,10 @@ export function sourceLabel(source: string): string {
 
 export function isBoardStatus(value: string): value is BoardStatus {
   return BOARD_CATEGORIES.some((category) => category.status === value)
+}
+
+export function statusLabel(status: BoardStatus): string {
+  return BOARD_CATEGORIES.find((category) => category.status === status)?.label ?? status
 }
 
 /** High first, then parts-arrived bump, then oldest. */

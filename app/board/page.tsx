@@ -21,6 +21,8 @@ export default async function BoardPage() {
       <BoardShell
         viewer={result.viewer}
         cards={[]}
+        catalog={{ contacts: [], properties: [], links: [], crew: [] }}
+        catalogError={null}
         profileMissing={false}
         loadError={result.message}
       />
@@ -35,6 +37,8 @@ export default async function BoardPage() {
     <BoardShell
       viewer={result.viewer}
       cards={result.cards}
+      catalog={result.catalog}
+      catalogError={result.catalogError}
       profileMissing={result.profileMissing}
       loadError={null}
     />
