@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { compareBoardCards, type BoardCard } from "./board"
+import { compareBoardCards, categoriesForStageView, parseBoardStageView, type BoardCard } from "./board"
 import {
+  crewStandpoint,
   duplicateWarningText,
   estimateDriveMinutes,
   haversineMiles,
@@ -91,6 +92,63 @@ test("distance matrix minutes round up from seconds", () => {
 test("haversine is zero at one point and positive across town", () => {
   assert.equal(haversineMiles(37.5, -77.4, 37.5, -77.4), 0)
   assert.ok(haversineMiles(37.54, -77.43, 37.5, -77.4) > 1)
+})
+
+test("live stages are the seven open columns, in board order", () => {
+  assert.deepEqual(
+    categoriesForStageView("live").map((category) => category.status),
+    ["new", "assigned", "ready", "in_progress", "to_estimate", "estimate_out", "parts"],
+  )
+  assert.equal(categoriesForStageView("all").length, 10)
+  assert.equal(parseBoardStageView(null), "live")
+  assert.equal(parseBoardStageView("all"), "all")
+  assert.equal(parseBoardStageView("closed"), "live")
+})
+
+test("who's where puts a busy person first, then free people A to Z", () => {
+  const rows = crewStandpoint(
+    [
+      { id: "zoe", fullName: "Zoe", role: "tech" },
+      { id: "amy", fullName: "Amy", role: "tech" },
+      { id: "matt", fullName: "Matt", role: "owner" },
+    ],
+    [
+      card({
+        id: "done",
+        priority: "normal",
+        createdAtMs: 1,
+        bumpedAtMs: null,
+        assignedUserId: "zoe",
+        status: "complete",
+      }),
+      card({
+        id: "now",
+        priority: "normal",
+        createdAtMs: 2,
+        bumpedAtMs: null,
+        assignedUserId: "matt",
+        status: "assigned",
+      }),
+      card({
+        id: "site",
+        priority: "normal",
+        createdAtMs: 3,
+        bumpedAtMs: null,
+        assignedUserId: "matt",
+        status: "in_progress",
+      }),
+    ],
+  )
+  assert.deepEqual(
+    rows.map((row) => row.fullName),
+    ["Matt", "Amy", "Zoe"],
+  )
+  assert.deepEqual(
+    rows[0]?.jobs.map((job) => job.id),
+    ["site", "now"],
+  )
+  assert.equal(rows[1]?.jobs.length, 0)
+  assert.equal(rows[2]?.jobs.length, 0)
 })
 
 test("high calls sort above an older normal call", () => {

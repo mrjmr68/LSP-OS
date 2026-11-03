@@ -246,7 +246,7 @@ export async function goEnRoute(input: {
 export async function assignRequest(input: {
   requestId: string
   techId: string | null
-}): Promise<ActionResult<{ assigned: boolean }>> {
+}): Promise<ActionResult<{ assigned: boolean; status: BoardStatus | null }>> {
   const ready = await readyClient()
   if (!ready.ok) {
     return ready
@@ -258,7 +258,7 @@ export async function assignRequest(input: {
     return { ok: false, message: "Pick someone on the crew." }
   }
 
-  const { error } = await ready.supabase.rpc("assign_request", {
+  const { data, error } = await ready.supabase.rpc("assign_request", {
     request_id: input.requestId,
     tech_id: input.techId,
   })
@@ -266,7 +266,8 @@ export async function assignRequest(input: {
     return { ok: false, message: actionMessage(error.message) }
   }
   revalidatePath("/board")
-  return { ok: true, data: { assigned: input.techId !== null } }
+  const status = typeof data === "string" && isBoardStatus(data) ? data : null
+  return { ok: true, data: { assigned: input.techId !== null, status } }
 }
 
 export async function setBoardStatus(input: {

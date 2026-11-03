@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import {
   BOARD_CATEGORIES,
+  categoriesForStageView,
+  isLiveBoardStatus,
   type BoardCard,
   type BoardStatus,
   type BoardViewer,
@@ -32,7 +34,13 @@ import {
   sourceLabel,
   statusLabel,
 } from "@/lib/board"
-import { mapsDirectionsUrl, ownerStatusNeedsReason } from "@/lib/board-rules"
+import {
+  getBoardStageViewServerSnapshot,
+  readBoardStageView,
+  subscribeBoardStageView,
+  writeBoardStageView,
+} from "@/lib/board-stage"
+import { crewStandpoint, mapsDirectionsUrl, ownerStatusNeedsReason } from "@/lib/board-rules"
 import {
   getQuickAddQueueServerSnapshot,
   readQuickAddQueue,
@@ -43,6 +51,7 @@ import {
 } from "@/lib/quick-add"
 
 type Filter = "all" | "mine"
+type Standpoint = "board" | "where"
 type Panel =
   | { kind: "enroute" | "detail" | "repeat" | "status" | "assign" | "delete"; card: BoardCard }
   | null
@@ -64,6 +73,12 @@ export function BoardShell({
 }) {
   const router = useRouter()
   const [filter, setFilter] = useState<Filter>("all")
+  const [standpoint, setStandpoint] = useState<Standpoint>("board")
+  const stageView = useSyncExternalStore(
+    subscribeBoardStageView,
+    readBoardStageView,
+    getBoardStageViewServerSnapshot,
+  )
   const queue = useSyncExternalStore(
     subscribeQuickAddQueue,
     readQuickAddQueue,
@@ -115,7 +130,25 @@ export function BoardShell({
   const visibleCards = [...queue.map(pendingCard), ...cards].filter((card) =>
     filter === "all" ? true : card.assignedUserId === viewer.profileId,
   )
-  const openCount = visibleCards.length
+  const owner = viewer.role === "owner"
+  const showWhere = owner && standpoint === "where"
+  const stageCategories = categoriesForStageView(stageView)
+  const boardCards = visibleCards.filter((card) =>
+    stageView === "all" ? true : isLiveBoardStatus(card.status),
+  )
+  const liveCardCount = visibleCards.filter((card) => isLiveBoardStatus(card.status)).length
+  const compact = liveCardCount <= 10
+  const whereRows = showWhere ? crewStandpoint(catalog.crew, cards) : []
+  const whereBusy = whereRows.filter((row) => row.jobs.length > 0).length
+  const summary = showWhere
+    ? whereRows.length === 0
+      ? "No active crew."
+      : `${whereBusy} on a call · ${whereRows.length - whereBusy} free`
+    : boardCards.length === 0
+      ? filter === "mine"
+        ? "Nothing assigned to you — check with an owner."
+        : "No open calls."
+      : `${boardCards.length} open ${boardCards.length === 1 ? "call" : "calls"}`
   const canAdd =
     !profileMissing &&
     !loadError &&
@@ -216,78 +249,120 @@ export function BoardShell({
           </p>
         ) : null}
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div role="group" aria-label="Board filter" className="grid grid-cols-2 gap-2 sm:flex">
-            <Button
-              type="button"
-              size="field"
-              variant={filter === "all" ? "default" : "outline"}
-              aria-pressed={filter === "all"}
-              onClick={() => setFilter("all")}
-            >
-              All jobs
-            </Button>
-            <Button
-              type="button"
-              size="field"
-              variant={filter === "mine" ? "default" : "outline"}
-              aria-pressed={filter === "mine"}
-              onClick={() => setFilter("mine")}
-            >
-              My jobs
-            </Button>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <div role="group" aria-label="Board filter" className="grid grid-cols-2 gap-2 sm:flex">
+              <Button
+                type="button"
+                size="field"
+                variant={filter === "all" ? "default" : "outline"}
+                aria-pressed={filter === "all"}
+                onClick={() => setFilter("all")}
+              >
+                All jobs
+              </Button>
+              <Button
+                type="button"
+                size="field"
+                variant={filter === "mine" ? "default" : "outline"}
+                aria-pressed={filter === "mine"}
+                onClick={() => setFilter("mine")}
+              >
+                My jobs
+              </Button>
+            </div>
+            {owner ? (
+              <div role="group" aria-label="Board view" className="grid grid-cols-2 gap-2 sm:flex">
+                <Button
+                  type="button"
+                  size="field"
+                  variant={standpoint === "board" ? "default" : "outline"}
+                  aria-pressed={standpoint === "board"}
+                  onClick={() => setStandpoint("board")}
+                >
+                  Board
+                </Button>
+                <Button
+                  type="button"
+                  size="field"
+                  variant={standpoint === "where" ? "default" : "outline"}
+                  aria-pressed={standpoint === "where"}
+                  onClick={() => setStandpoint("where")}
+                >
+                  Who&apos;s where
+                </Button>
+              </div>
+            ) : null}
+            {showWhere ? null : (
+              <div role="group" aria-label="Stages" className="grid grid-cols-2 gap-2 sm:flex">
+                <Button
+                  type="button"
+                  size="field"
+                  variant={stageView === "live" ? "default" : "outline"}
+                  aria-pressed={stageView === "live"}
+                  onClick={() => writeBoardStageView("live")}
+                >
+                  Live stages
+                </Button>
+                <Button
+                  type="button"
+                  size="field"
+                  variant={stageView === "all" ? "default" : "outline"}
+                  aria-pressed={stageView === "all"}
+                  onClick={() => writeBoardStageView("all")}
+                >
+                  All stages
+                </Button>
+              </div>
+            )}
           </div>
-          <p className="text-sm text-muted-foreground">
-            {openCount === 0
-              ? filter === "mine"
-                ? "Nothing assigned to you — check with an owner."
-                : "No open calls."
-              : `${openCount} open ${openCount === 1 ? "call" : "calls"}`}
-          </p>
+          <p className="text-sm text-muted-foreground">{summary}</p>
         </div>
 
-        <div className="flex flex-col gap-3 md:hidden">
-          {BOARD_CATEGORIES.map((category) => (
-            <CategoryColumn
-              key={category.status}
-              category={category}
-              cards={visibleCards.filter((card) => card.status === category.status)}
-              collapsible
-              viewer={viewer}
-              onOpen={openCard}
-              onRepeat={(card) => setPanel({ kind: "repeat", card })}
-              onStatus={(card) => {
-                setPanelError(null)
-                setPanel({ kind: "status", card })
-              }}
-              onMore={(card) => {
-                setPanelError(null)
-                setPanel({ kind: "assign", card })
-              }}
-            />
-          ))}
-        </div>
-        <div className="hidden gap-3 overflow-x-auto pb-6 md:flex md:snap-x">
-          {BOARD_CATEGORIES.map((category) => (
-            <CategoryColumn
-              key={category.status}
-              category={category}
-              cards={visibleCards.filter((card) => card.status === category.status)}
-              collapsible={false}
-              viewer={viewer}
-              onOpen={openCard}
-              onRepeat={(card) => setPanel({ kind: "repeat", card })}
-              onStatus={(card) => {
-                setPanelError(null)
-                setPanel({ kind: "status", card })
-              }}
-              onMore={(card) => {
-                setPanelError(null)
-                setPanel({ kind: "assign", card })
-              }}
-            />
-          ))}
-        </div>
+        {showWhere ? (
+          <WhosWhere
+            rows={whereRows}
+            viewer={viewer}
+            onOpen={openCard}
+            onRepeat={(card) => setPanel({ kind: "repeat", card })}
+            onStatus={(card) => {
+              setPanelError(null)
+              setPanel({ kind: "status", card })
+            }}
+            onMore={(card) => {
+              setPanelError(null)
+              setPanel({ kind: "assign", card })
+            }}
+          />
+        ) : (
+          <div
+            className={
+              compact
+                ? "flex flex-col gap-2"
+                : "flex flex-col gap-2 md:flex-row md:snap-x md:gap-3 md:overflow-x-auto md:pb-6"
+            }
+          >
+            {stageCategories.map((category) => (
+              <CategoryColumn
+                key={category.status}
+                category={category}
+                cards={boardCards.filter((card) => card.status === category.status)}
+                compact={compact}
+                viewer={viewer}
+                onOpen={openCard}
+                onRepeat={(card) => setPanel({ kind: "repeat", card })}
+                onStatus={(card) => {
+                  setPanelError(null)
+                  setPanel({ kind: "status", card })
+                }}
+                onMore={(card) => {
+                  setPanelError(null)
+                  setPanel({ kind: "assign", card })
+                }}
+              />
+            ))}
+          </div>
+        )}
       </main>
 
       {canAdd ? (
@@ -390,7 +465,16 @@ export function BoardShell({
               setPanelError(result.message)
               return
             }
-            setNotice(techId ? `${card.displayNumber} assigned.` : `${card.displayNumber} unassigned.`)
+            if (techId) {
+              setNotice(`${card.displayNumber} assigned.`)
+            } else {
+              const landed = result.data.status ? statusLabel(result.data.status) : null
+              setNotice(
+                landed
+                  ? `${card.displayNumber} unassigned → ${landed}.`
+                  : `${card.displayNumber} unassigned.`,
+              )
+            }
             setPanel(null)
             router.refresh()
           })
@@ -493,7 +577,7 @@ function currentPosition(): Promise<{ lat: number; lng: number } | null> {
 function CategoryColumn({
   category,
   cards,
-  collapsible,
+  compact,
   viewer,
   onOpen,
   onRepeat,
@@ -502,64 +586,25 @@ function CategoryColumn({
 }: {
   category: (typeof BOARD_CATEGORIES)[number]
   cards: BoardCard[]
-  collapsible: boolean
+  compact: boolean
   viewer: BoardViewer
   onOpen: (card: BoardCard) => void
   onRepeat: (card: BoardCard) => void
   onStatus: (card: BoardCard) => void
   onMore: (card: BoardCard) => void
 }) {
-  const [expanded, setExpanded] = useState(cards.length > 0)
-  const [seenCount, setSeenCount] = useState(cards.length)
-  if (cards.length !== seenCount) {
-    setSeenCount(cards.length)
-    if (cards.length > 0) {
-      setExpanded(true)
-    }
-  }
-  const header = (
-    <div className="flex min-h-12 items-end justify-between gap-3 px-3 py-2">
-      <div>
-        <h2 className="font-display text-xl leading-none font-semibold tracking-wide uppercase">
-          {category.label}
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">{category.hint}</p>
-      </div>
-      <p className="font-display text-3xl leading-none tabular-nums">{cards.length}</p>
-    </div>
-  )
-  const body = (
-    <div className="flex flex-col gap-2 p-2">
-      {cards.length === 0 ? (
-        <p className="px-2 py-4 text-sm text-muted-foreground">No calls</p>
-      ) : (
-        cards.map((card) => (
-          <CallCard
-            key={card.id}
-            card={card}
-            viewer={viewer}
-            onOpen={onOpen}
-            onRepeat={onRepeat}
-            onStatus={onStatus}
-            onMore={onMore}
-          />
-        ))
-      )}
-    </div>
-  )
-
-  if (collapsible) {
+  if (cards.length === 0) {
     return (
-      <section aria-label={category.label} className="rounded-xl border border-border bg-card">
-        <button
-          type="button"
-          className="w-full border-b border-border text-left"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {header}
-        </button>
-        {expanded ? body : null}
+      <section
+        aria-label={category.label}
+        className={
+          compact
+            ? "flex min-h-10 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/50 px-3 py-2"
+            : "flex min-h-10 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/50 px-3 py-2 md:w-36 md:shrink-0 md:snap-start"
+        }
+      >
+        <h2 className="text-sm font-medium text-muted-foreground">{category.label}</h2>
+        <p className="text-sm tabular-nums text-muted-foreground">0</p>
       </section>
     )
   }
@@ -567,16 +612,119 @@ function CategoryColumn({
   return (
     <section
       aria-label={category.label}
-      className="rounded-xl border border-border bg-card md:w-72 md:shrink-0 md:snap-start"
+      className={
+        compact
+          ? "rounded-xl border border-border bg-card"
+          : "rounded-xl border border-border bg-card md:w-72 md:shrink-0 md:snap-start"
+      }
     >
-      <header className="border-b border-border">{header}</header>
-      {body}
+      <header className="border-b border-border">
+        <div className="flex items-center justify-between gap-3 px-3 py-2">
+          <div>
+            <h2
+              className={
+                compact
+                  ? "font-display text-lg leading-none font-semibold tracking-wide uppercase"
+                  : "font-display text-xl leading-none font-semibold tracking-wide uppercase"
+              }
+            >
+              {category.label}
+            </h2>
+            {compact ? null : (
+              <p className="mt-1 text-xs text-muted-foreground">{category.hint}</p>
+            )}
+          </div>
+          <p
+            className={
+              compact
+                ? "font-display text-xl leading-none tabular-nums"
+                : "font-display text-3xl leading-none tabular-nums"
+            }
+          >
+            {cards.length}
+          </p>
+        </div>
+      </header>
+      <div className="flex flex-col gap-2 p-2">
+        {cards.map((card) => (
+          <CallCard
+            key={card.id}
+            card={card}
+            compact={compact}
+            viewer={viewer}
+            onOpen={onOpen}
+            onRepeat={onRepeat}
+            onStatus={onStatus}
+            onMore={onMore}
+          />
+        ))}
+      </div>
     </section>
+  )
+}
+
+function WhosWhere({
+  rows,
+  viewer,
+  onOpen,
+  onRepeat,
+  onStatus,
+  onMore,
+}: {
+  rows: ReturnType<typeof crewStandpoint>
+  viewer: BoardViewer
+  onOpen: (card: BoardCard) => void
+  onRepeat: (card: BoardCard) => void
+  onStatus: (card: BoardCard) => void
+  onMore: (card: BoardCard) => void
+}) {
+  if (rows.length === 0) {
+    return (
+      <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
+        No active crew.
+      </p>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2" aria-label="Who's where">
+      {rows.map((row) => (
+        <section key={row.id} aria-label={row.fullName} className="rounded-xl border border-border bg-card px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-display text-lg leading-none font-semibold tracking-wide">
+              {row.fullName}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              {row.role === "owner" ? "Owner" : "Tech"}
+            </p>
+          </div>
+          {row.jobs.length === 0 ? (
+            <p className="mt-2 text-sm text-muted-foreground">Free</p>
+          ) : (
+            <div className="mt-2 flex flex-col gap-2">
+              {row.jobs.map((card) => (
+                <CallCard
+                  key={card.id}
+                  card={card}
+                  compact
+                  viewer={viewer}
+                  onOpen={onOpen}
+                  onRepeat={onRepeat}
+                  onStatus={onStatus}
+                  onMore={onMore}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      ))}
+    </div>
   )
 }
 
 function CallCard({
   card,
+  compact = false,
   viewer,
   onOpen,
   onRepeat,
@@ -584,6 +732,7 @@ function CallCard({
   onMore,
 }: {
   card: BoardCard
+  compact?: boolean
   viewer: BoardViewer
   onOpen: (card: BoardCard) => void
   onRepeat: (card: BoardCard) => void
@@ -593,14 +742,15 @@ function CallCard({
   const high = card.priority === "high"
   const repeat = card.repeatCalls.length > 0
   const owner = viewer.role === "owner"
+  const pad = compact ? "px-3 py-2" : "px-3 py-3"
   return (
     <article
       className={
         high
-          ? "rounded-lg border border-high/50 bg-high/15 px-3 py-3"
+          ? `rounded-lg border border-high/50 bg-high/15 ${pad}`
           : repeat
-            ? "rounded-lg border border-amber-700/40 bg-amber-50 px-3 py-3"
-            : "rounded-lg border border-border bg-background px-3 py-3"
+            ? `rounded-lg border border-amber-700/40 bg-amber-50 ${pad}`
+            : `rounded-lg border border-border bg-background ${pad}`
       }
       onContextMenu={(event) => {
         if (!owner || card.pendingSync) {
@@ -612,7 +762,9 @@ function CallCard({
     >
       <button type="button" className="w-full text-left" onClick={() => onOpen(card)}>
         <div className="flex items-start justify-between gap-2">
-          <p className="font-display text-lg leading-none tracking-wide">{card.displayNumber}</p>
+          <p className={compact ? "font-display text-base leading-none tracking-wide" : "font-display text-lg leading-none tracking-wide"}>
+            {card.displayNumber}
+          </p>
           <span className="inline-flex items-center gap-2">
             {card.pendingSync ? (
               <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -625,12 +777,12 @@ function CallCard({
             <span className="text-xs text-muted-foreground tabular-nums">{card.ageLabel}</span>
           </span>
         </div>
-        <p className="mt-2 text-sm font-medium">
+        <p className={compact ? "mt-1 text-sm font-medium" : "mt-2 text-sm font-medium"}>
           {card.propertyName} · {card.unitLabel}
         </p>
         <p className="mt-1 text-sm leading-5">{card.issue}</p>
       </button>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+      <div className={compact ? "mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground" : "mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"}>
         <span>{card.sourceLabel}</span>
         <span className="inline-flex min-h-6 items-center gap-1">
           <span
@@ -643,7 +795,7 @@ function CallCard({
         </span>
       </div>
       {repeat || owner ? (
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className={compact ? "mt-2 flex flex-wrap gap-2" : "mt-3 flex flex-wrap gap-2"}>
           {repeat ? (
             <Button type="button" size="field" variant="outline" onClick={() => onRepeat(card)}>
               Repeat

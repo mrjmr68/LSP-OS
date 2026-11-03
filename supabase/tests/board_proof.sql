@@ -545,3 +545,295 @@ begin
   raise notice 'PASS: Board proof finished. Quick Add, en route, and A1–A5 hold.';
 end
 $final$;
+
+-- ---------------------------------------------------------------------------
+-- Unassign. Fresh Assigned returns to New. A visit past planned, or In
+-- Progress, returns to Ready. Ready and Parts keep their column. Owner only.
+-- ---------------------------------------------------------------------------
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', true);
+
+do $proof$
+begin
+  begin
+    perform public.assign_request('77777777-7777-4777-8777-777777777777', null);
+    raise exception 'FAIL: a tech unassigned a call';
+  exception
+    when others then
+      if sqlerrm like 'FAIL:%' then
+        raise;
+      end if;
+      if sqlerrm not like '%Only an owner%' then
+        raise exception 'FAIL: expected an owner-only unassign error, got: %', sqlerrm;
+      end if;
+  end;
+  raise notice 'PASS: a tech cannot unassign';
+end
+$proof$;
+rollback;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $proof$
+declare
+  tech_id uuid;
+  landed public.board_status;
+  req uuid := '77777777-7777-4777-8777-777777777777';
+begin
+  select id into tech_id
+  from public.profiles
+  where auth_user_id = '22222222-2222-4222-8222-222222222222';
+
+  landed := public.assign_request(req, null);
+  if landed <> 'new' then
+    raise exception 'FAIL: unassign on New returned %', landed;
+  end if;
+  if (
+    select count(*) from public.status_events
+    where request_id = req and from_status is not null
+  ) <> 0 then
+    raise exception 'FAIL: unassign on New wrote a status change';
+  end if;
+
+  perform public.assign_request(req, tech_id);
+  landed := public.assign_request(req, null);
+  if landed <> 'new' then
+    raise exception 'FAIL: unassign of a planned visit returned %', landed;
+  end if;
+  if (select assigned_user_id from public.service_requests where id = req) is not null then
+    raise exception 'FAIL: unassign left a tech on the call';
+  end if;
+  if (
+    select count(*) from public.service_visits
+    where request_id = req
+      and tech_user_id = tech_id
+      and status = 'cancelled'
+  ) <> 1 then
+    raise exception 'FAIL: unassign left the planned visit open';
+  end if;
+  if (
+    select count(*) from public.status_events
+    where request_id = req
+      and from_status = 'assigned'
+      and to_status = 'new'
+      and trigger = 'manual'
+      and reason = 'Unassigned'
+  ) <> 1 then
+    raise exception 'FAIL: fresh unassign did not log Assigned to New';
+  end if;
+  raise notice 'PASS: unassign of a planned visit returns the call to New';
+end
+$proof$;
+rollback;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $proof$
+declare
+  tech_id uuid;
+  landed public.board_status;
+  req uuid := '77777777-7777-4777-8777-777777777777';
+begin
+  select id into tech_id
+  from public.profiles
+  where auth_user_id = '22222222-2222-4222-8222-222222222222';
+
+  perform public.assign_request(req, tech_id);
+  update public.service_visits
+  set status = 'en_route'
+  where request_id = req
+    and status = 'planned';
+
+  landed := public.assign_request(req, null);
+  if landed <> 'ready' then
+    raise exception 'FAIL: unassign after en route returned %', landed;
+  end if;
+  if (select board_status from public.service_requests where id = req) <> 'ready' then
+    raise exception 'FAIL: en route unassign did not land on Ready';
+  end if;
+  if (
+    select count(*) from public.service_visits
+    where request_id = req
+      and status in ('planned', 'en_route', 'on_site', 'working')
+  ) <> 0 then
+    raise exception 'FAIL: en route visit stayed active after unassign';
+  end if;
+  if (
+    select count(*) from public.status_events
+    where request_id = req
+      and from_status = 'assigned'
+      and to_status = 'ready'
+      and trigger = 'manual'
+      and reason = 'Unassigned'
+  ) <> 1 then
+    raise exception 'FAIL: en route unassign did not log Assigned to Ready';
+  end if;
+  raise notice 'PASS: unassign after en route returns the call to Ready';
+end
+$proof$;
+rollback;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $proof$
+declare
+  tech_id uuid;
+  landed public.board_status;
+  req uuid := '77777777-7777-4777-8777-777777777777';
+begin
+  select id into tech_id
+  from public.profiles
+  where auth_user_id = '22222222-2222-4222-8222-222222222222';
+
+  perform public.assign_request(req, tech_id);
+  update public.service_visits
+  set status = 'closed', closed_at = now()
+  where request_id = req
+    and status = 'planned';
+
+  landed := public.assign_request(req, null);
+  if landed <> 'ready' then
+    raise exception 'FAIL: unassign after a closed visit returned %', landed;
+  end if;
+  if (
+    select count(*) from public.service_visits
+    where request_id = req
+      and tech_user_id = tech_id
+      and status = 'closed'
+  ) <> 1 then
+    raise exception 'FAIL: unassign cancelled a visit that was already closed';
+  end if;
+  raise notice 'PASS: a closed visit sends unassign to Ready and stays closed';
+end
+$proof$;
+rollback;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $proof$
+declare
+  tech_id uuid;
+  landed public.board_status;
+  req uuid := '77777777-7777-4777-8777-777777777777';
+  open_clocks integer;
+begin
+  select id into tech_id
+  from public.profiles
+  where auth_user_id = '22222222-2222-4222-8222-222222222222';
+
+  perform public.assign_request(req, tech_id);
+  perform set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', true);
+  perform public.go_en_route(req, 12);
+  perform set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+  landed := public.assign_request(req, null);
+  if landed <> 'ready' then
+    raise exception 'FAIL: unassign from In Progress returned %', landed;
+  end if;
+  if (select assigned_user_id from public.service_requests where id = req) is not null then
+    raise exception 'FAIL: In Progress unassign left the tech assigned';
+  end if;
+  if (
+    select count(*) from public.service_visits
+    where request_id = req
+      and status in ('planned', 'en_route', 'on_site', 'working')
+  ) <> 0 then
+    raise exception 'FAIL: In Progress unassign left an active visit';
+  end if;
+  select count(*) into open_clocks
+  from public.time_segments t
+  join public.service_visits v on v.id = t.visit_id
+  where v.request_id = req
+    and t.ended_at is null;
+  if open_clocks <> 0 then
+    raise exception 'FAIL: unassign left a travel clock running';
+  end if;
+  if (
+    select count(*) from public.time_segments t
+    join public.service_visits v on v.id = t.visit_id
+    where v.request_id = req
+      and t.kind = 'travel'
+      and t.ended_at is not null
+      and t.end_source = 'owner_edit'
+  ) <> 1 then
+    raise exception 'FAIL: unassign did not close the travel clock as an owner edit';
+  end if;
+  if (
+    select count(*) from public.status_events
+    where request_id = req
+      and from_status = 'in_progress'
+      and to_status = 'ready'
+      and trigger = 'manual'
+      and reason = 'Unassigned'
+  ) <> 1 then
+    raise exception 'FAIL: In Progress unassign did not log the move to Ready';
+  end if;
+  raise notice 'PASS: unassign from In Progress returns to Ready and stops the visit';
+end
+$proof$;
+rollback;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $proof$
+declare
+  tech_id uuid;
+  landed public.board_status;
+  req uuid := '77777777-7777-4777-8777-777777777777';
+  ready_events integer;
+begin
+  select id into tech_id
+  from public.profiles
+  where auth_user_id = '22222222-2222-4222-8222-222222222222';
+
+  perform public.assign_request(req, tech_id);
+  perform public.set_board_status(req, 'ready', null);
+  select count(*) into ready_events
+  from public.status_events
+  where request_id = req;
+
+  landed := public.assign_request(req, null);
+  if landed <> 'ready' then
+    raise exception 'FAIL: unassign on Ready returned %', landed;
+  end if;
+  if (select assigned_user_id from public.service_requests where id = req) is not null then
+    raise exception 'FAIL: Ready unassign left the tech assigned';
+  end if;
+  if (select count(*) from public.status_events where request_id = req) <> ready_events then
+    raise exception 'FAIL: unassign on Ready changed the status';
+  end if;
+
+  perform public.set_board_status(req, 'parts', 'motor on order');
+  update public.service_requests
+  set assigned_user_id = tech_id
+  where id = req;
+  landed := public.assign_request(req, null);
+  if landed <> 'parts' then
+    raise exception 'FAIL: unassign on Parts returned %', landed;
+  end if;
+  if (select assigned_user_id from public.service_requests where id = req) is not null then
+    raise exception 'FAIL: Parts unassign left the tech assigned';
+  end if;
+  if (
+    select count(*) from public.status_events
+    where request_id = req
+      and from_status = 'parts'
+  ) <> 0 then
+    raise exception 'FAIL: unassign on Parts moved the column';
+  end if;
+  raise notice 'PASS: unassign on Ready and Parts clears the tech and keeps the column';
+end
+$proof$;
+rollback;
