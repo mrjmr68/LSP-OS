@@ -13,18 +13,16 @@ import {
   matchesQuery,
   pairNeedsLink,
   quickAddMissing,
-  residentRuleText,
   type QuickAddField,
 } from "@/lib/board-rules"
 import {
   contactsForPicker,
-  isQuickAddSource,
   propertiesForPicker,
-  QUICK_ADD_SOURCES,
+  QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT,
+  QUICK_ADD_DEFAULT_SOURCE,
   type BoardCatalog,
   type PendingQuickAdd,
   type PropertyUnit,
-  type QuickAddSource,
 } from "@/lib/quick-add"
 
 export function QuickAddSheet({
@@ -75,8 +73,6 @@ function QuickAddForm({
   const [units, setUnits] = useState<PropertyUnit[]>([])
   const [unitsMessage, setUnitsMessage] = useState<string | null>(null)
   const [issue, setIssue] = useState("")
-  const [source, setSource] = useState<QuickAddSource>("phone")
-  const [resident, setResident] = useState(false)
   const [attempted, setAttempted] = useState(false)
   const [linkPrompt, setLinkPrompt] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -160,8 +156,8 @@ function QuickAddForm({
       unitId,
       newUnitLabel: unitId ? null : unitText.trim(),
       issue: issue.trim(),
-      source,
-      reportedByResident: resident,
+      source: QUICK_ADD_DEFAULT_SOURCE,
+      reportedByResident: QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT,
       linkContact: needsLink && linkContact,
       contactName: contact?.name ?? "Contact",
       propertyName: property?.name ?? "Property",
@@ -359,43 +355,6 @@ function QuickAddForm({
             onChange={(event) => setIssue(event.target.value)}
           />
         </div>
-
-        <fieldset className="flex flex-col gap-2">
-          <legend className="text-sm font-medium">Source</legend>
-          <div className="flex flex-wrap gap-2">
-            {QUICK_ADD_SOURCES.map((item) => (
-              <Button
-                key={item.id}
-                type="button"
-                size="field"
-                variant={source === item.id ? "default" : "outline"}
-                aria-pressed={source === item.id}
-                onClick={() => {
-                  if (isQuickAddSource(item.id)) {
-                    setSource(item.id)
-                  }
-                }}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </div>
-        </fieldset>
-
-        <Button
-          type="button"
-          variant={resident ? "default" : "outline"}
-          size="field"
-          aria-pressed={resident}
-          onClick={() => setResident((current) => !current)}
-        >
-          Resident reported
-        </Button>
-        {resident && property ? (
-          <p className="text-sm leading-6">
-            {residentRuleText(property.residentMode, property.residentNotes)}
-          </p>
-        ) : null}
 
         {linkPrompt ? (
           <div className="rounded-lg border border-border bg-card px-3 py-3">

@@ -1,7 +1,7 @@
 # LSP OS — Acceptance Criteria (v0.1, Nov 1 2026)
 
 ## Quick Add
-- AC-QA1 Given any user opens Quick Add, when Contact, Property, Unit, Issue are filled and Save tapped, then a request in New is created with source tagged, in < 30 s of typical use.
+- AC-QA1 Given any user opens Quick Add, when Contact, Property, Unit, Issue are filled and Save tapped, then a request in New is created with source `phone` and reported_by_resident false, in < 30 s of typical use. The form does not ask for source or resident-reported.
 - AC-QA2 Given any of the 4 fields is blank, when Save tapped, then save is blocked and the empty field highlighted; no other field is required.
 - AC-QA3 Given a contact is picked, then the property list shows only that contact's properties; given a property is picked first, the contact list shows its contacts.
 - AC-QA4 Given the unit had a request in the last 14 days, when saving, then a duplicate warning shows and the request is still created.

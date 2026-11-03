@@ -9,6 +9,20 @@ export const QUICK_ADD_SOURCES = [
 
 export type QuickAddSource = (typeof QUICK_ADD_SOURCES)[number]["id"]
 
+/** Quick Add does not ask. Phone is the intake tag for this form. */
+export const QUICK_ADD_DEFAULT_SOURCE: QuickAddSource = "phone"
+
+/** Quick Add does not ask. Matches the service_requests column default. */
+export const QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT = false
+
+/**
+ * customer_contacts reaches customers two ways: customer_id, and
+ * customers.billing_contact_id. A bare customers(...) embed is PGRST201,
+ * which fails the whole Quick Add catalog.
+ */
+export const CONTACT_CUSTOMER_EMBED =
+  "customers!customer_contacts_customer_id_fkey(name)"
+
 export function isQuickAddSource(value: string): value is QuickAddSource {
   return QUICK_ADD_SOURCES.some((source) => source.id === value)
 }
