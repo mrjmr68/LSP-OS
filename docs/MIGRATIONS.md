@@ -12,7 +12,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261101163000_seed_app_config.sql` | The one AppConfig row, including US federal holidays 2026–2035. |
 | `20261102120000_legacy_import.sql` | Old workbook calls. Not Board cards and not invoices. Financial Pulse cannot count them. |
 | `20261102140000_board_actions.sql` | Quick Add, assign, High, status switch, My Jobs en route, and auto rules A2–A5. |
-| `20261103120000_app_feedback.sql` | Board notes (`app_feedback`). Crew inserts their own. Owners read all. Email stamp is separate. |
+| `20261103130000_app_feedback.sql` | Board notes (`app_feedback`). Crew inserts their own. Owners read all. Email stamp is separate. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
