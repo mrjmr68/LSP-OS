@@ -60,3 +60,7 @@ echo "RLS proof passed."
 echo "Running Board proof"
 run_sql "$root/supabase/tests/board_proof.sql"
 echo "Board proof passed."
+
+echo "Running feedback proof"
+run_sql "$root/supabase/tests/feedback_proof.sql"
+echo "Feedback proof passed."

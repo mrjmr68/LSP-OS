@@ -39,14 +39,14 @@ Copy `.env.example` to `.env.local`.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser and server | Yes, before real sign-in |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server only, never `NEXT_PUBLIC_` | Keep it for later admin scripts. The app does not read it yet. |
 | `SUPABASE_DB_URL` | The import script only | Yes, before loading the price book. Direct connection, port 5432. |
-| `RESEND_API_KEY` | Invoice and flag-back email | No. That is the invoicing milestone. |
-| `EMAIL_FROM` | Same | No. |
+| `RESEND_API_KEY` | Invoice email, and the Board note email | No. A note is saved without it. |
+| `EMAIL_FROM` | Same. `INVOICE_FROM_EMAIL` is the other accepted name. | No. |
 
 Vercel needs the same public Supabase variables on the preview and production environments. Creating the Vercel project and the Supabase project is a manual step.
 
 ## Load the price book and the old history
 
-Do this once the database exists. The full click-path is `docs/IMPORT.md`. If the hosted project already has the price book, skip the import and apply `supabase/migrations/20261102140000_board_actions.sql` only.
+Do this once the database exists. The full click-path is `docs/IMPORT.md`. If the hosted project already has the price book, skip the import. Apply any migration that is not on that database yet. The live database already has `20261103120000_board_unassign.sql`. The new file is `supabase/migrations/20261103130000_app_feedback.sql`.
 
 ```bash
 npm run import:dry-run
@@ -64,7 +64,7 @@ Old calls live in `legacy_imports` and do not count toward Financial Pulse. They
 The hosted project already has the foundation and the loaded history. Use this list only when the database is empty.
 
 1. Create a Supabase project.
-2. Run the SQL files in `supabase/migrations` in order (SQL editor or `supabase db push`). Details are in `docs/MIGRATIONS.md`. An existing project that already ran the earlier files only needs `20261102140000_board_actions.sql`.
+2. Run the SQL files in `supabase/migrations` in order (SQL editor or `supabase db push`). Details are in `docs/MIGRATIONS.md`. An existing project that already ran the earlier files needs whichever of these are not recorded yet: `20261102140000_board_actions.sql`, `20261103120000_board_unassign.sql`, and `20261103130000_app_feedback.sql`.
 3. Copy the project URL and the anon key into `.env.local` and into Vercel.
 4. In Authentication, turn off public sign-up. Add each person. New users become `tech` automatically.
 5. In the SQL editor, promote the owner-technicians:
@@ -79,7 +79,7 @@ where email = 'you@example.com';
 7. Create the Vercel project, set the env vars, and open the preview URL on a phone. Sign in and you should land on the Board.
 8. Load the price book and the old history. See `docs/IMPORT.md`.
 
-Not needed yet: a Resend account, a Storage bucket, a portal password, or a QuickBooks connection.
+Not needed yet: a Resend account, a Storage bucket, a portal password, or a QuickBooks connection. Report / suggest saves without Resend.
 
 Old history stays off the Board. New calls come from Quick Add. The next build is the active visit.
 
@@ -103,7 +103,9 @@ My jobs, then the assigned call: **Go en route** moves it to In Progress, starts
 
 A unit with another call in the last 14 days shows **Repeat**. Open it for the dates and bundle codes. That history is real service requests, not the legacy import.
 
-`npm test` checks the Board rules. `npm run prove:rls` checks them in Postgres, including auto rules A1–A5. Apply `supabase/migrations/20261102140000_board_actions.sql` on the hosted database before trying this on the live app. Do not re-run the M2 imports.
+The avatar menu has **Report / suggest** for anyone on the crew list. Pick Bug, Observation, or Request / suggestion, write one line or more, and send. The row is stored in `app_feedback` with the page, All jobs or My jobs, and the open call when a sheet is open. When `RESEND_API_KEY` and `EMAIL_FROM` are both set, a short email also goes to matt@legsvc.com and the other owners. When they are not set, the note is still saved.
+
+`npm test` checks the Board rules. `npm run prove:rls` checks them in Postgres, including auto rules A1–A5 and who can read a note. Apply `supabase/migrations/20261103130000_app_feedback.sql` on the hosted database before trying the note on the live app. `20261103120000` is already recorded there as board unassign. Do not re-run the M2 imports.
 
 ## Docs
 
