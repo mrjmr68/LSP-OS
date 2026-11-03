@@ -4,10 +4,11 @@ One mobile-first PWA shell; owners see extra controls on the same screens. Top b
 
 ## S1 Board (home)
 Purpose: live truth of all open calls.
-Elements: All Jobs / My Jobs toggle; 10 category columns (mobile: stacked collapsible sections with counts, New first); request cards (property, unit, issue, assigned avatar, age, source icon, High treatment, 2-week repeat badge, pending-sync dot); FAB "+ Quick Add". Avatar menu: Report / suggest (signed-in crew) opens a sheet — type Bug, Observation, or Request / suggestion, plus a note. The sheet shows the page, the All / My jobs filter, and the open call as a read-only line.
-Taps: card → Job view (S3). My Jobs card tap (assigned tech, status assigned/ready) → confirm sheet "Go en route?" → A1 (In Progress, ETA SMS, Maps). Repeat badge → sheet of recent calls (date, bundle codes). Owner: status pill → status switch sheet (allowed targets; override needs reason); long-press → assign tech, High on/off, delete duplicate.
+Elements: All Jobs / My Jobs toggle. Owners also get Board / Who's where. Live stages by default: New, Assigned, Ready, In Progress, To Estimate, Estimate Out, Parts. Complete, Invoiced, and Closed sit behind Live stages / All stages. That choice is remembered on the phone. Empty live stages stay visible as a quiet count of 0. When about ten or fewer live calls are on screen, columns stack and cards sit tighter. Request cards (property, unit, issue, assigned avatar, age, source, High treatment, 2-week repeat badge, pending-sync dot); FAB "+ Quick Add". Avatar menu: Report / suggest (signed-in crew) opens a sheet — type Bug, Observation, or Request / suggestion, plus a note. The sheet shows the page, the All / My jobs filter, and the open call as a read-only line.
+Who's where: one card per active crew member, including people with no call (they say Free). People with a live call sort first, then A–Z. Tapping a call opens the same detail and assign actions as a Board card.
+Taps: card → Job view (S3). My Jobs card tap (assigned tech, status assigned/ready) → confirm sheet "Go en route?" → A1 (In Progress, ETA SMS, Maps). Repeat badge → sheet of recent calls (date, bundle codes). Owner: status pill → status switch sheet (allowed targets; override needs reason); long-press or Assign → assign tech, High on/off, delete duplicate. Unassign says where the call landed, for example "unassigned → New".
 Sort: High first, then Parts→Ready bumped, then oldest.
-Empty: category hidden when 0; all empty → "No open calls." My Jobs empty → "Nothing assigned to you — check with an owner."
+Empty: a live stage with no calls stays on screen, quiet, count 0. All empty → "No open calls." My Jobs empty → "Nothing assigned to you — check with an owner."
 Error: load fail → keep cached board + banner "Showing saved board from 8:42 AM". 
 Offline: cached board read-only for status switching; Quick Add still works (queued).
 

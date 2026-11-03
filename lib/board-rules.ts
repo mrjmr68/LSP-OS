@@ -1,6 +1,9 @@
 import {
   BOARD_CATEGORIES,
+  type BoardCard,
   type BoardStatus,
+  compareBoardCards,
+  isLiveBoardStatus,
   statusLabel,
 } from "./board"
 
@@ -180,3 +183,74 @@ export function matchesQuery(text: string, query: string): boolean {
 export const BOARD_STATUS_ORDER: BoardStatus[] = BOARD_CATEGORIES.map(
   (category) => category.status,
 )
+
+export type CrewMemberRef = {
+  id: string
+  fullName: string
+  role: "owner" | "tech"
+}
+
+export type CrewStandpointRow = CrewMemberRef & {
+  jobs: BoardCard[]
+}
+
+const CURRENT_CALL_RANK: Record<BoardStatus, number> = {
+  in_progress: 0,
+  assigned: 1,
+  ready: 2,
+  to_estimate: 3,
+  estimate_out: 4,
+  parts: 5,
+  new: 6,
+  complete: 7,
+  invoiced: 8,
+  closed: 9,
+}
+
+/**
+ * Who's where. One row per active crew member.
+ * People with a live call come first, then free people. Each group is A–Z by name.
+ * A live call is New through Parts. Complete, Invoiced, and Closed do not count as where they are.
+ * When someone has several live calls, In Progress is first, then Assigned, then Ready, then the rest.
+ */
+export function crewStandpoint(
+  crew: readonly CrewMemberRef[],
+  cards: readonly BoardCard[],
+): CrewStandpointRow[] {
+  const jobsByPerson = new Map<string, BoardCard[]>()
+  for (const card of cards) {
+    if (!card.assignedUserId || card.pendingSync || !isLiveBoardStatus(card.status)) {
+      continue
+    }
+    const list = jobsByPerson.get(card.assignedUserId)
+    if (list) {
+      list.push(card)
+    } else {
+      jobsByPerson.set(card.assignedUserId, [card])
+    }
+  }
+  for (const list of jobsByPerson.values()) {
+    list.sort((a, b) => {
+      const rank = CURRENT_CALL_RANK[a.status] - CURRENT_CALL_RANK[b.status]
+      if (rank !== 0) {
+        return rank
+      }
+      return compareBoardCards(a, b)
+    })
+  }
+
+  return crew
+    .map((person) => ({
+      id: person.id,
+      fullName: person.fullName,
+      role: person.role,
+      jobs: jobsByPerson.get(person.id) ?? [],
+    }))
+    .sort((a, b) => {
+      const busy = (b.jobs.length > 0 ? 1 : 0) - (a.jobs.length > 0 ? 1 : 0)
+      if (busy !== 0) {
+        return busy
+      }
+      return a.fullName.localeCompare(b.fullName, "en", { sensitivity: "base" })
+    })
+}
