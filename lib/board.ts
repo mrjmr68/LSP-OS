@@ -13,6 +13,34 @@ export const BOARD_CATEGORIES = [
 
 export type BoardStatus = (typeof BOARD_CATEGORIES)[number]["status"]
 
+/** Stages that need a look during a normal day. Complete, Invoiced, and Closed stay behind All stages. */
+export const LIVE_BOARD_STATUSES = [
+  "new",
+  "assigned",
+  "ready",
+  "in_progress",
+  "to_estimate",
+  "estimate_out",
+  "parts",
+] as const satisfies readonly BoardStatus[]
+
+export type BoardStageView = "live" | "all"
+
+export function isLiveBoardStatus(status: BoardStatus): boolean {
+  return LIVE_BOARD_STATUSES.some((live) => live === status)
+}
+
+export function categoriesForStageView(view: BoardStageView) {
+  if (view === "all") {
+    return BOARD_CATEGORIES
+  }
+  return BOARD_CATEGORIES.filter((category) => isLiveBoardStatus(category.status))
+}
+
+export function parseBoardStageView(value: string | null): BoardStageView {
+  return value === "all" ? "all" : "live"
+}
+
 export type RepeatCall = {
   id: string
   displayNumber: string

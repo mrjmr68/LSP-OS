@@ -18,7 +18,11 @@ Format: from → to (who, trigger)
 | new | ready | owner | triaged, no tech yet |
 | new | to_estimate | owner | known estimate job |
 | ready | assigned | owner | assigns tech |
-| assigned | ready | owner | unassign |
+| assigned | new | owner | unassign, and no visit is past planned (only planned, cancelled, or none) |
+| assigned | ready | owner | unassign after a visit is past planned (en route, on site, working, closed, or attempt) |
+| in_progress | ready | owner | unassign; the active visit is cancelled so the call is not in progress with no tech |
+| ready | ready | owner | unassign clears the tech only |
+| new, to_estimate, estimate_out, parts, complete, invoiced, closed | same status | owner | unassign clears the tech only |
 | assigned / ready | in_progress | assigned tech (A1) | taps job in My Jobs (en route) |
 | in_progress | complete | system (A2) | invoice drafted on visit close (easy / one-off path satisfied) |
 | in_progress | parts | tech / system (A4) | closes visit on parts path (model+serial typed); or part order info entered |
@@ -56,6 +60,7 @@ Priority (orthogonal): normal ↔ high — **owner only**, any open status. No n
 | en_route / on_site | attempt | tech | "Couldn't get in" + reason |
 | planned / en_route | cancelled | owner | reassigned or duplicate |
 | planned | cancelled | owner | |
+| planned / en_route / on_site / working | cancelled | owner | unassign (open time segments end; on site and working are cancelled, not closed) |
 Forbidden: working → on_site/en_route; closed → anything (owner may "reopen" creating audit; tech never); skipping on_site to working without GPS or tap.
 
 Close gates (guided capture): bundle or one-off/attempt marker + note always; parts → model_typed+serial_typed; estimate → bundle or narrative; sign-off per contract; attempt → reason.
