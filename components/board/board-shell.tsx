@@ -11,6 +11,7 @@ import {
   setRequestPriority,
   softDeleteRequest,
 } from "@/app/actions/board"
+import { FeedbackSheet } from "@/components/board/feedback-sheet"
 import { QuickAddSheet } from "@/components/board/quick-add"
 import { Sheet } from "@/components/board/sheet"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -33,6 +35,7 @@ import {
   statusLabel,
 } from "@/lib/board"
 import { mapsDirectionsUrl, ownerStatusNeedsReason } from "@/lib/board-rules"
+import type { FeedbackContextInput } from "@/lib/feedback"
 import {
   getQuickAddQueueServerSnapshot,
   readQuickAddQueue,
@@ -72,6 +75,13 @@ export function BoardShell({
   const offline = useSyncExternalStore(subscribeOffline, getOfflineSnapshot, getOnlineServerSnapshot)
   const [flushToken, setFlushToken] = useState(0)
   const [quickAddOpen, setQuickAddOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackContext, setFeedbackContext] = useState<FeedbackContextInput>({
+    path: "/board",
+    filter: "all",
+    requestId: null,
+    displayNumber: null,
+  })
   const [panel, setPanel] = useState<Panel>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [panelError, setPanelError] = useState<string | null>(null)
@@ -120,6 +130,18 @@ export function BoardShell({
     !profileMissing &&
     !loadError &&
     (viewer.mode === "preview" || Boolean(viewer.profileId))
+  const visiblePanel = feedbackOpen ? null : panel
+
+  function openFeedback() {
+    const card = panel && !panel.card.pendingSync ? panel.card : null
+    setFeedbackContext({
+      path: window.location.pathname || "/board",
+      filter,
+      requestId: card?.id ?? null,
+      displayNumber: card?.displayNumber ?? null,
+    })
+    setFeedbackOpen(true)
+  }
 
   function rememberQueue(next: PendingQuickAdd[]) {
     writeQuickAddQueue(next)
@@ -182,7 +204,7 @@ export function BoardShell({
               offline={offline}
               pending={queue.length}
             />
-            <AccountMenu viewer={viewer} />
+            <AccountMenu viewer={viewer} onReport={openFeedback} />
           </div>
         </div>
       </header>
@@ -318,15 +340,26 @@ export function BoardShell({
         }}
       />
 
+      <FeedbackSheet
+        open={feedbackOpen}
+        context={feedbackContext}
+        onClose={() => setFeedbackOpen(false)}
+        onSaved={(message) => {
+          setNotice(message)
+          setFeedbackOpen(false)
+          setPanel(null)
+        }}
+      />
+
       <EnRouteSheet
-        card={panel?.kind === "enroute" ? panel.card : null}
+        card={visiblePanel?.kind === "enroute" ? visiblePanel.card : null}
         busy={busy}
         error={panelError}
         onClose={() => setPanel(null)}
         onConfirm={(card) => void confirmEnRoute(card)}
       />
       <DetailSheet
-        card={panel?.kind === "detail" ? panel.card : null}
+        card={visiblePanel?.kind === "detail" ? visiblePanel.card : null}
         viewer={viewer}
         busy={busy}
         error={panelError}
@@ -353,10 +386,13 @@ export function BoardShell({
           })
         }}
       />
-      <RepeatSheet card={panel?.kind === "repeat" ? panel.card : null} onClose={() => setPanel(null)} />
+      <RepeatSheet
+        card={visiblePanel?.kind === "repeat" ? visiblePanel.card : null}
+        onClose={() => setPanel(null)}
+      />
       <StatusSheet
-        key={panel?.kind === "status" ? panel.card.id : "status-closed"}
-        card={panel?.kind === "status" ? panel.card : null}
+        key={visiblePanel?.kind === "status" ? visiblePanel.card.id : "status-closed"}
+        card={visiblePanel?.kind === "status" ? visiblePanel.card : null}
         busy={busy}
         error={panelError}
         onClose={() => setPanel(null)}
@@ -376,7 +412,7 @@ export function BoardShell({
         }}
       />
       <AssignSheet
-        card={panel?.kind === "assign" ? panel.card : null}
+        card={visiblePanel?.kind === "assign" ? visiblePanel.card : null}
         crew={catalog.crew}
         busy={busy}
         error={panelError}
@@ -412,7 +448,7 @@ export function BoardShell({
         }}
       />
       <DeleteSheet
-        card={panel?.kind === "delete" ? panel.card : null}
+        card={visiblePanel?.kind === "delete" ? visiblePanel.card : null}
         busy={busy}
         error={panelError}
         onClose={() => setPanel(null)}
@@ -1023,7 +1059,13 @@ function SyncPill({
   )
 }
 
-function AccountMenu({ viewer }: { viewer: BoardViewer }) {
+function AccountMenu({
+  viewer,
+  onReport,
+}: {
+  viewer: BoardViewer
+  onReport: () => void
+}) {
   const roleLabel =
     viewer.role === "owner" ? "Owner" : viewer.role === "tech" ? "Tech" : "No role"
 
@@ -1035,15 +1077,25 @@ function AccountMenu({ viewer }: { viewer: BoardViewer }) {
         {initials(viewer.fullName)}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-56">
-        <DropdownMenuLabel className="text-sm text-foreground">{viewer.fullName}</DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="text-sm text-foreground">
+            {viewer.fullName}
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuItem disabled className="min-h-12">
           {roleLabel}
         </DropdownMenuItem>
         {viewer.mode === "authenticated" ? (
           <>
             <DropdownMenuSeparator />
+            {viewer.profileId ? (
+              <DropdownMenuItem className="min-h-12" onClick={onReport}>
+                Report / suggest
+              </DropdownMenuItem>
+            ) : null}
             <form action="/auth/signout" method="post">
               <DropdownMenuItem
+                nativeButton
                 render={<button type="submit" className="w-full text-left" />}
                 className="min-h-12"
               >
