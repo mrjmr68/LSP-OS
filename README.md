@@ -93,7 +93,7 @@ Sign-in is email and password. `/auth/callback` completes invite and reset links
 
 ## Board
 
-Ten categories, in order: New, Assigned, Ready, In Progress, To Estimate, Estimate Out, Parts, Complete, Invoiced, Closed. Each shows a count. On a phone, an empty category stays collapsed.
+Ten categories, in order: New, Assigned, Ready, In Progress, To Estimate, Estimate Out, Parts, Complete, Invoiced, Closed. They stack vertically, New at the top. Each shows a count. An empty stage stays on screen with a count of 0. Live stages hide Complete, Invoiced, and Closed until All stages is on.
 
 All jobs / My jobs is on the shell. **+ Quick Add** asks for contact, property, unit, and issue. It tags the call as phone and does not ask whether a resident reported it. A unit with another call in the last 14 days shows a warning and the call is still saved. Offline saves stay on the phone and sync when the signal returns.
 

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { compareBoardCards, categoriesForStageView, parseBoardStageView, type BoardCard } from "./board"
+import {
+  compareBoardCards,
+  categoriesForStageView,
+  groupBoardByStage,
+  parseBoardStageView,
+  type BoardCard,
+} from "./board"
 import {
   crewStandpoint,
   duplicateWarningText,
@@ -94,7 +100,7 @@ test("haversine is zero at one point and positive across town", () => {
   assert.ok(haversineMiles(37.54, -77.43, 37.5, -77.4) > 1)
 })
 
-test("live stages are the seven open columns, in board order", () => {
+test("live stages are the seven open stages, in board order", () => {
   assert.deepEqual(
     categoriesForStageView("live").map((category) => category.status),
     ["new", "assigned", "ready", "in_progress", "to_estimate", "estimate_out", "parts"],
@@ -103,6 +109,35 @@ test("live stages are the seven open columns, in board order", () => {
   assert.equal(parseBoardStageView(null), "live")
   assert.equal(parseBoardStageView("all"), "all")
   assert.equal(parseBoardStageView("closed"), "live")
+})
+
+test("a new call stays under New, and Ready only holds ready calls", () => {
+  const fresh = { id: "quick-add", status: "new" as const }
+  const waiting = { id: "parts-in", status: "ready" as const }
+  const done = { id: "billed", status: "complete" as const }
+  const live = groupBoardByStage([waiting, fresh, done], "live")
+
+  assert.deepEqual(
+    live.map((group) => group.status),
+    ["new", "assigned", "ready", "in_progress", "to_estimate", "estimate_out", "parts"],
+  )
+  assert.deepEqual(live[0]?.cards.map((card) => card.id), ["quick-add"])
+  assert.equal(live[0]?.label, "New")
+  assert.deepEqual(live[2]?.cards.map((card) => card.id), ["parts-in"])
+  assert.equal(live[2]?.label, "Ready")
+  assert.equal(
+    live.some((group) => group.status !== "new" && group.cards.some((card) => card.id === "quick-add")),
+    false,
+  )
+  assert.equal(live.some((group) => group.cards.some((card) => card.id === "billed")), false)
+
+  const all = groupBoardByStage([fresh, done], "all")
+  assert.equal(all[0]?.status, "new")
+  assert.equal(all.at(-1)?.status, "closed")
+  assert.deepEqual(all.find((group) => group.status === "complete")?.cards.map((card) => card.id), [
+    "billed",
+  ])
+  assert.deepEqual(all.find((group) => group.status === "ready")?.cards, [])
 })
 
 test("who's where puts a busy person first, then free people A to Z", () => {

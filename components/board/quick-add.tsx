@@ -35,7 +35,7 @@ export function QuickAddSheet({
   open: boolean
   catalog: BoardCatalog
   onClose: () => void
-  onCreated: (message: string) => void
+  onCreated: (message: string, requestId: string) => void
   onQueued: (item: PendingQuickAdd) => void
 }) {
   if (!open) {
@@ -59,7 +59,7 @@ function QuickAddForm({
 }: {
   catalog: BoardCatalog
   onClose: () => void
-  onCreated: (message: string) => void
+  onCreated: (message: string, requestId: string) => void
   onQueued: (item: PendingQuickAdd) => void
 }) {
   const [contactId, setContactId] = useState("")
@@ -191,7 +191,7 @@ function QuickAddForm({
             nowMs: Date.now(),
           })}`
         : ""
-      onCreated(`Saved ${result.data.displayNumber}.${duplicateNote}`)
+      onCreated(`Saved ${result.data.displayNumber}.${duplicateNote}`, result.data.id)
       onClose()
     } catch {
       onQueued({
