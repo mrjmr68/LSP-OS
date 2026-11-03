@@ -1,7 +1,7 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import {
   assignRequest,
@@ -27,8 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import {
   BOARD_CATEGORIES,
-  categoriesForStageView,
-  isLiveBoardStatus,
+  groupBoardByStage,
   type BoardCard,
   type BoardStatus,
   type BoardViewer,
@@ -101,6 +100,8 @@ export function BoardShell({
   const [notice, setNotice] = useState<string | null>(null)
   const [panelError, setPanelError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const revealCall = useRef<{ id: string; until: number } | null>(null)
+  const [revealNonce, setRevealNonce] = useState(0)
 
   useEffect(() => {
     if (offline || viewer.mode !== "authenticated") {
@@ -142,23 +143,19 @@ export function BoardShell({
   )
   const owner = viewer.role === "owner"
   const showWhere = owner && standpoint === "where"
-  const stageCategories = categoriesForStageView(stageView)
-  const boardCards = visibleCards.filter((card) =>
-    stageView === "all" ? true : isLiveBoardStatus(card.status),
-  )
-  const liveCardCount = visibleCards.filter((card) => isLiveBoardStatus(card.status)).length
-  const compact = liveCardCount <= 10
+  const stageGroups = groupBoardByStage(visibleCards, stageView)
+  const openCount = stageGroups.reduce((total, group) => total + group.cards.length, 0)
   const whereRows = showWhere ? crewStandpoint(catalog.crew, cards) : []
   const whereBusy = whereRows.filter((row) => row.jobs.length > 0).length
   const summary = showWhere
     ? whereRows.length === 0
       ? "No active crew."
       : `${whereBusy} on a call · ${whereRows.length - whereBusy} free`
-    : boardCards.length === 0
+    : openCount === 0
       ? filter === "mine"
         ? "Nothing assigned to you — check with an owner."
         : "No open calls."
-      : `${boardCards.length} open ${boardCards.length === 1 ? "call" : "calls"}`
+      : `${openCount} open ${openCount === 1 ? "call" : "calls"}`
   const canAdd =
     !profileMissing &&
     !loadError &&
@@ -179,6 +176,25 @@ export function BoardShell({
   function rememberQueue(next: PendingQuickAdd[]) {
     writeQuickAddQueue(next)
   }
+
+  function showSavedCall(id: string) {
+    setStandpoint("board")
+    revealCall.current = { id, until: Date.now() + 1500 }
+    setRevealNonce((current) => current + 1)
+  }
+
+  useEffect(() => {
+    const target = revealCall.current
+    if (!target || standpoint === "where" || Date.now() > target.until) {
+      return
+    }
+    const scroll = () => {
+      document.getElementById(boardCardElementId(target.id))?.scrollIntoView({ block: "center" })
+    }
+    scroll()
+    const followUp = window.setTimeout(scroll, 400)
+    return () => window.clearTimeout(followUp)
+  }, [revealNonce, standpoint, cards, queue])
 
   function openCard(card: BoardCard) {
     if (card.pendingSync) {
@@ -357,19 +373,12 @@ export function BoardShell({
             }}
           />
         ) : (
-          <div
-            className={
-              compact
-                ? "flex flex-col gap-2"
-                : "flex flex-col gap-2 md:flex-row md:snap-x md:gap-3 md:overflow-x-auto md:pb-6"
-            }
-          >
-            {stageCategories.map((category) => (
+          <div className="flex flex-col gap-3">
+            {stageGroups.map((group) => (
               <CategoryColumn
-                key={category.status}
-                category={category}
-                cards={boardCards.filter((card) => card.status === category.status)}
-                compact={compact}
+                key={group.status}
+                category={group}
+                cards={group.cards}
                 viewer={viewer}
                 onOpen={openCard}
                 onRepeat={(card) => setPanel({ kind: "repeat", card })}
@@ -402,13 +411,15 @@ export function BoardShell({
         open={quickAddOpen}
         catalog={catalog}
         onClose={() => setQuickAddOpen(false)}
-        onCreated={(message) => {
+        onCreated={(message, requestId) => {
           setNotice(message)
+          showSavedCall(requestId)
           router.refresh()
         }}
         onQueued={(item) => {
           rememberQueue([...readQuickAddQueue(), item])
           setNotice("Saved on this phone. It will sync when the signal is back.")
+          showSavedCall(item.clientId)
           if (navigator.onLine) {
             setFlushToken((current) => current + 1)
           }
@@ -572,6 +583,10 @@ function getOnlineServerSnapshot() {
   return false
 }
 
+function boardCardElementId(id: string) {
+  return `board-card-${id}`
+}
+
 function pendingCard(item: PendingQuickAdd): BoardCard {
   return {
     id: item.clientId,
@@ -613,16 +628,14 @@ function currentPosition(): Promise<{ lat: number; lng: number } | null> {
 function CategoryColumn({
   category,
   cards,
-  compact,
   viewer,
   onOpen,
   onRepeat,
   onStatus,
   onMore,
 }: {
-  category: (typeof BOARD_CATEGORIES)[number]
+  category: { status: BoardStatus; label: string; hint: string }
   cards: BoardCard[]
-  compact: boolean
   viewer: BoardViewer
   onOpen: (card: BoardCard) => void
   onRepeat: (card: BoardCard) => void
@@ -632,12 +645,9 @@ function CategoryColumn({
   if (cards.length === 0) {
     return (
       <section
+        id={`board-stage-${category.status}`}
         aria-label={category.label}
-        className={
-          compact
-            ? "flex min-h-10 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/50 px-3 py-2"
-            : "flex min-h-10 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/50 px-3 py-2 md:w-36 md:shrink-0 md:snap-start"
-        }
+        className="flex min-h-12 scroll-mt-24 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/50 px-3 py-2"
       >
         <h2 className="text-sm font-medium text-muted-foreground">{category.label}</h2>
         <p className="text-sm tabular-nums text-muted-foreground">0</p>
@@ -647,38 +657,19 @@ function CategoryColumn({
 
   return (
     <section
+      id={`board-stage-${category.status}`}
       aria-label={category.label}
-      className={
-        compact
-          ? "rounded-xl border border-border bg-card"
-          : "rounded-xl border border-border bg-card md:w-72 md:shrink-0 md:snap-start"
-      }
+      className="scroll-mt-24 rounded-xl border border-border bg-card"
     >
       <header className="border-b border-border">
-        <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-h-12 items-center justify-between gap-3 px-3 py-2">
           <div>
-            <h2
-              className={
-                compact
-                  ? "font-display text-lg leading-none font-semibold tracking-wide uppercase"
-                  : "font-display text-xl leading-none font-semibold tracking-wide uppercase"
-              }
-            >
+            <h2 className="font-display text-xl leading-none font-semibold tracking-wide uppercase">
               {category.label}
             </h2>
-            {compact ? null : (
-              <p className="mt-1 text-xs text-muted-foreground">{category.hint}</p>
-            )}
+            <p className="mt-1 text-xs text-muted-foreground">{category.hint}</p>
           </div>
-          <p
-            className={
-              compact
-                ? "font-display text-xl leading-none tabular-nums"
-                : "font-display text-3xl leading-none tabular-nums"
-            }
-          >
-            {cards.length}
-          </p>
+          <p className="font-display text-3xl leading-none tabular-nums">{cards.length}</p>
         </div>
       </header>
       <div className="flex flex-col gap-2 p-2">
@@ -686,7 +677,6 @@ function CategoryColumn({
           <CallCard
             key={card.id}
             card={card}
-            compact={compact}
             viewer={viewer}
             onOpen={onOpen}
             onRepeat={onRepeat}
@@ -781,6 +771,7 @@ function CallCard({
   const pad = compact ? "px-3 py-2" : "px-3 py-3"
   return (
     <article
+      id={boardCardElementId(card.id)}
       className={
         high
           ? `rounded-lg border border-high/50 bg-high/15 ${pad}`

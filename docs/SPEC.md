@@ -55,7 +55,7 @@ The central screen. Every user lands here. It lists **all open calls**, categori
 - **Invoiced** — invoice sent, awaiting payment.
 - **Closed** — paid.
 
-**Filter toggle:** All Jobs / My Jobs. Owners also switch the Board to Who's where: one row per active crew member, live call or Free, people with a call first then A–Z. The Board opens on the live stages (New through Parts). Complete, Invoiced, and Closed are behind All stages. The phone remembers that choice.
+**Filter toggle:** All Jobs / My Jobs. Owners also switch the Board to Who's where: one row per active crew member, live call or Free, people with a call first then A–Z. The Board opens on the live stages (New through Parts). Complete, Invoiced, and Closed are behind All stages. The phone remembers that choice. Stages always stack vertically, full width, New at the top. Who's where stays a crew list.
 
 **2-week repeat-unit highlight.** Any unit with a previous call in the last 2 weeks is visually highlighted on its card. Tapping the highlight shows the recent call history (bundle codes, dates).
 

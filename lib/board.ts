@@ -37,6 +37,31 @@ export function categoriesForStageView(view: BoardStageView) {
   return BOARD_CATEGORIES.filter((category) => isLiveBoardStatus(category.status))
 }
 
+export type BoardStageGroup<T extends { status: BoardStatus }> = {
+  status: BoardStatus
+  label: string
+  hint: string
+  cards: T[]
+}
+
+/**
+ * Stages stay in spec order, New first.
+ * A card is placed by its status string, so a new call cannot land under Ready.
+ */
+export function groupBoardByStage<T extends { status: BoardStatus }>(
+  cards: readonly T[],
+  view: BoardStageView,
+): BoardStageGroup<T>[] {
+  const visible =
+    view === "all" ? cards : cards.filter((card) => isLiveBoardStatus(card.status))
+  return categoriesForStageView(view).map((category) => ({
+    status: category.status,
+    label: category.label,
+    hint: category.hint,
+    cards: visible.filter((card) => card.status === category.status),
+  }))
+}
+
 export function parseBoardStageView(value: string | null): BoardStageView {
   return value === "all" ? "all" : "live"
 }
