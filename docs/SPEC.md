@@ -77,6 +77,8 @@ The central screen. Every user lands here. It lists **all open calls**, categori
 - **Unit**
 - **Issue** (one line of free text)
 
+Quick Add does not ask for source or whether a resident reported the call. It stores source `phone` and `reported_by_resident` false.
+
 **Two-way contact/property picker.** Pick a contact → choose from their related properties. Or pick a property → choose from its contacts. (Some managers run multiple properties.) Unit field offers recently-serviced units at that property first.
 
 **Duplicate handling.** Intake runs a duplicate check in the background and may surface a warning ("unit 12B had a no-heat call 3 days ago — completed"), but it never blocks. **Duplicates are allowed.** The request is created; the tech verifies in the field; the extra request is deleted (owner action) as needed.

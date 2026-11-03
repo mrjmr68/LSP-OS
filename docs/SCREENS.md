@@ -12,7 +12,7 @@ Error: load fail → keep cached board + banner "Showing saved board from 8:42 A
 Offline: cached board read-only for status switching; Quick Add still works (queued).
 
 ## S2 Quick Add (sheet)
-Fields (4, all required): Contact, Property (two-way picker), Unit (recent units first; type to add new), Issue (one line). Source chip (defaults phone). Optional resident-reported toggle → shows property resident-report rule.
+Fields (4, all required): Contact, Property (two-way picker), Unit (recent units first; type to add new), Issue (one line). Save tags source `phone` and leaves reported-by-resident false. The sheet does not ask for source or whether a resident reported it.
 Taps: Save → request `new`; duplicate warning inline ("12B had no-heat 3 days ago — Complete") never blocks.
 Error: missing field highlights; contact with no link to property → "Link contact to this property?" yes adds ContactProperty.
 Offline: saves to queue, card shows pending.

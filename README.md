@@ -95,7 +95,7 @@ Sign-in is email and password. `/auth/callback` completes invite and reset links
 
 Ten categories, in order: New, Assigned, Ready, In Progress, To Estimate, Estimate Out, Parts, Complete, Invoiced, Closed. Each shows a count. On a phone, an empty category stays collapsed.
 
-All jobs / My jobs is on the shell. **+ Quick Add** asks for contact, property, unit, and issue. The source defaults to phone. A unit with another call in the last 14 days shows a warning and the call is still saved. Offline saves stay on the phone and sync when the signal returns.
+All jobs / My jobs is on the shell. **+ Quick Add** asks for contact, property, unit, and issue. It tags the call as phone and does not ask whether a resident reported it. A unit with another call in the last 14 days shows a warning and the call is still saved. Offline saves stay on the phone and sync when the signal returns.
 
 An owner assigns a tech, sets High (nothing is texted), switches status, or deletes a duplicate. A skipped status needs a reason. A tech does not get those controls.
 

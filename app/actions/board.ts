@@ -6,9 +6,9 @@ import { isBoardStatus, type BoardStatus } from "@/lib/board"
 import { lookupDriveMinutes, type GeoPoint } from "@/lib/eta"
 import { isSupabaseConfigured } from "@/lib/env"
 import {
-  isQuickAddSource,
+  QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT,
+  QUICK_ADD_DEFAULT_SOURCE,
   type PropertyUnit,
-  type QuickAddSource,
 } from "@/lib/quick-add"
 import { createClient } from "@/lib/supabase/server"
 
@@ -22,8 +22,6 @@ export type QuickAddInput = {
   unitId: string | null
   newUnitLabel: string | null
   issue: string
-  source: QuickAddSource
-  reportedByResident: boolean
   linkContact: boolean
 }
 
@@ -54,9 +52,6 @@ export async function createQuickAdd(
   if (input.unitId && !uuidPattern.test(input.unitId)) {
     return { ok: false, message: "Pick a unit again." }
   }
-  if (!isQuickAddSource(input.source)) {
-    return { ok: false, message: "Pick how the call came in." }
-  }
   if (input.issue.trim() === "") {
     return { ok: false, message: "Issue is required." }
   }
@@ -67,8 +62,8 @@ export async function createQuickAdd(
     unit_id: input.unitId,
     new_unit_label: input.unitId ? null : input.newUnitLabel?.trim() || null,
     issue: input.issue.trim(),
-    source: input.source,
-    reported_by_resident: input.reportedByResident,
+    source: QUICK_ADD_DEFAULT_SOURCE,
+    reported_by_resident: QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT,
     link_contact: input.linkContact,
   })
 

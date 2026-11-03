@@ -14,7 +14,15 @@ import {
 } from "@/lib/board"
 import { formatInNewYork } from "@/lib/board-rules"
 import { isSupabaseConfigured } from "@/lib/env"
-import { emptyCatalog, type BoardCatalog, type BoardCrewMember, type PickerContact, type PickerLink, type PickerProperty } from "@/lib/quick-add"
+import {
+  CONTACT_CUSTOMER_EMBED,
+  emptyCatalog,
+  type BoardCatalog,
+  type BoardCrewMember,
+  type PickerContact,
+  type PickerLink,
+  type PickerProperty,
+} from "@/lib/quick-add"
 import { createClient } from "@/lib/supabase/server"
 
 export type BoardLoad =
@@ -315,7 +323,7 @@ async function loadCatalog(
   const [contacts, properties, links, crew, config, contracts] = await Promise.all([
     supabase
       .from("customer_contacts")
-      .select("id, name, customer_id, phone, active, customers ( name )")
+      .select(`id, name, customer_id, phone, active, ${CONTACT_CUSTOMER_EMBED}`)
       .eq("active", true)
       .order("name"),
     supabase
@@ -331,6 +339,12 @@ async function loadCatalog(
 
   const failed = [contacts.error, properties.error, links.error, crew.error].find(Boolean)
   if (failed) {
+    console.error("Quick Add catalog did not load", {
+      contacts: contacts.error?.message,
+      properties: properties.error?.message,
+      links: links.error?.message,
+      crew: crew.error?.message,
+    })
     return {
       catalog: emptyCatalog,
       windowDays: 14,
