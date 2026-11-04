@@ -354,10 +354,13 @@ export function emptyDraft(requestId: string, clientDraftId: string): VisitDraft
 
 const QUEUE_KEY = "lsp.visitQueue.v1"
 const DRAFT_PREFIX = "lsp.visitDraft.v1."
+const EMPTY_VISIT_QUEUE: VisitCommand[] = []
 
 const queueListeners = new Set<() => void>()
 let queueCacheRaw = ""
-let queueCache: VisitCommand[] = []
+let queueCache: VisitCommand[] = EMPTY_VISIT_QUEUE
+const draftCacheRaw = new Map<string, string>()
+const draftCache = new Map<string, VisitDraft | null>()
 
 function storage(): Storage | null {
   if (typeof window === "undefined") {
@@ -369,7 +372,7 @@ function storage(): Storage | null {
 export function readVisitQueue(): VisitCommand[] {
   const store = storage()
   if (!store) {
-    return []
+    return EMPTY_VISIT_QUEUE
   }
   try {
     const raw = store.getItem(QUEUE_KEY) ?? ""
@@ -377,10 +380,11 @@ export function readVisitQueue(): VisitCommand[] {
       return queueCache
     }
     queueCacheRaw = raw
-    queueCache = parseQueue(raw)
+    queueCache = raw ? parseQueue(raw) : EMPTY_VISIT_QUEUE
     return queueCache
   } catch {
-    queueCache = []
+    queueCacheRaw = ""
+    queueCache = EMPTY_VISIT_QUEUE
     return queueCache
   }
 }
@@ -405,7 +409,7 @@ export function subscribeVisitQueue(listener: () => void) {
 }
 
 export function getVisitQueueServerSnapshot(): VisitCommand[] {
-  return []
+  return EMPTY_VISIT_QUEUE
 }
 
 export function enqueueVisitCommand(command: VisitCommand) {
@@ -419,16 +423,17 @@ export function readVisitDraft(requestId: string): VisitDraft | null {
     return null
   }
   try {
-    const raw = store.getItem(DRAFT_PREFIX + requestId)
-    if (!raw) {
-      return null
+    const raw = store.getItem(DRAFT_PREFIX + requestId) ?? ""
+    if (draftCacheRaw.get(requestId) === raw) {
+      return draftCache.get(requestId) ?? null
     }
-    const parsed = JSON.parse(raw) as unknown
-    if (!isVisitDraft(parsed)) {
-      return null
-    }
-    return { ...emptyDraft(parsed.requestId, parsed.clientDraftId), ...parsed, optimisticStatus: parsed.optimisticStatus ?? null }
+    const draft = draftFromRaw(raw)
+    draftCacheRaw.set(requestId, raw)
+    draftCache.set(requestId, draft)
+    return draft
   } catch {
+    draftCacheRaw.set(requestId, "")
+    draftCache.set(requestId, null)
     return null
   }
 }
@@ -439,7 +444,10 @@ export function writeVisitDraft(draft: VisitDraft) {
     return
   }
   const next = { ...draft, updatedAt: new Date().toISOString() }
-  store.setItem(DRAFT_PREFIX + draft.requestId, JSON.stringify(next))
+  const raw = JSON.stringify(next)
+  store.setItem(DRAFT_PREFIX + draft.requestId, raw)
+  draftCacheRaw.set(draft.requestId, raw)
+  draftCache.set(draft.requestId, next)
   queueListeners.forEach((listener) => listener())
 }
 
@@ -487,7 +495,24 @@ export function clearVisitDraft(requestId: string) {
   store.removeItem(DRAFT_PREFIX + requestId)
   store.removeItem(PHOTO_PREFIX + requestId)
   store.removeItem(PHOTO_PREFIX + requestId + ":nameplate")
+  draftCacheRaw.set(requestId, "")
+  draftCache.set(requestId, null)
   queueListeners.forEach((listener) => listener())
+}
+
+function draftFromRaw(raw: string): VisitDraft | null {
+  if (!raw) {
+    return null
+  }
+  const parsed = JSON.parse(raw) as unknown
+  if (!isVisitDraft(parsed)) {
+    return null
+  }
+  return {
+    ...emptyDraft(parsed.requestId, parsed.clientDraftId),
+    ...parsed,
+    optimisticStatus: parsed.optimisticStatus ?? null,
+  }
 }
 
 function parseQueue(raw: string): VisitCommand[] {

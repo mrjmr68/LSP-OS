@@ -35,6 +35,7 @@ import {
   emptyReadings,
   enqueueVisitCommand,
   formatDollars,
+  getVisitQueueServerSnapshot,
   isTransportFailure,
   newCommandId,
   pathAfterBundle,
@@ -106,7 +107,7 @@ function VisitSession({
 }) {
   const router = useRouter()
   const draft = useSyncExternalStore(subscribeVisitQueue, () => readVisitDraft(model.requestId), () => null)
-  const queue = useSyncExternalStore(subscribeVisitQueue, readVisitQueue, () => [])
+  const queue = useSyncExternalStore(subscribeVisitQueue, readVisitQueue, getVisitQueueServerSnapshot)
   const offline = useSyncExternalStore(subscribeOffline, getOfflineSnapshot, () => false)
   const initial = useMemo(() => fieldsFrom(model, draft), [model, draft])
   const [step, setStep] = useState<Step>(() => openingStep(model, draft))

@@ -3,13 +3,19 @@ import test from "node:test"
 
 import {
   attemptGaps,
+  clearVisitDraft,
   closeGaps,
   departureBlocked,
+  emptyDraft,
   formatDollars,
+  getVisitQueueServerSnapshot,
   pathAfterBundle,
+  readVisitDraft,
+  readVisitQueue,
   reduceQueue,
   syncLabel,
   withinGeofence,
+  writeVisitDraft,
   type VisitCommand,
 } from "./visit"
 
@@ -113,6 +119,44 @@ test("sync label follows draft, queue, and conflict", () => {
   assert.equal(syncLabel({ offline: true, queued: 2, conflict: false }).tone, "offline")
   assert.equal(syncLabel({ offline: false, queued: 1, conflict: false }).label, "1 pending")
   assert.equal(syncLabel({ offline: true, queued: 1, conflict: true }).tone, "conflict")
+})
+
+test("visit snapshots stay cached so the visit screen can subscribe", () => {
+  const memory = new Map<string, string>()
+  const previous = globalThis.window
+  Object.assign(globalThis, {
+    window: {
+      localStorage: {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          memory.set(key, value)
+        },
+        removeItem: (key: string) => {
+          memory.delete(key)
+        },
+      },
+    },
+  })
+  try {
+    assert.equal(getVisitQueueServerSnapshot(), getVisitQueueServerSnapshot())
+    assert.equal(readVisitQueue(), getVisitQueueServerSnapshot())
+    const requestId = "request-1"
+    assert.equal(readVisitDraft(requestId), null)
+    assert.equal(readVisitDraft(requestId), readVisitDraft(requestId))
+    writeVisitDraft({ ...emptyDraft(requestId, "draft-1"), note: "Replaced the capacitor." })
+    const saved = readVisitDraft(requestId)
+    assert.equal(saved, readVisitDraft(requestId))
+    assert.equal(saved?.note, "Replaced the capacitor.")
+    clearVisitDraft(requestId)
+    assert.equal(readVisitDraft(requestId), null)
+    assert.equal(readVisitDraft(requestId), readVisitDraft(requestId))
+  } finally {
+    if (previous === undefined) {
+      delete (globalThis as { window?: unknown }).window
+    } else {
+      globalThis.window = previous
+    }
+  }
 })
 
 test("queue flush drops a conflicting call and retries the rest later", () => {
