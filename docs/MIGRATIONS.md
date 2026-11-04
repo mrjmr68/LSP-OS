@@ -15,6 +15,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261103120000_board_unassign.sql` | Unassign clears the tech and cancels the active visit. A fresh Assigned call returns to New. In Progress, or any call whose visit got past planned, returns to Ready. Other columns stay put. |
 | `20261103130000_app_feedback.sql` | Board notes (`app_feedback`). Crew inserts their own. Owners read all. Email stamp is separate. |
 | `20261104020000_owner_on_the_way.sql` | On the way works for an owner assigned to the call. The status switch still needs a reason for that jump. |
+| `20261104120000_active_visit.sql` | Arrival, job start, guided close, parts, and attempt. Easy and one-off close draft an invoice and move the call to Complete. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
@@ -90,3 +91,17 @@ These are in the database now so M3–M5 do not have to loosen security to ship.
 - `legacy_imports` holds the old workbook. `counts_toward_pulse` is constrained false. Crew members can read the rows. They cannot insert them. Loading the rows is `docs/IMPORT.md`.
 
 `app_feedback` holds Board notes (bug, observation, suggestion). An active crew member inserts a row as themselves. They can read their own rows. Owners can read every row. Nobody updates the text from the app. `email_sent_at` stays null until Resend accepts a notice.
+
+## Active visit
+
+`20261104120000_active_visit.sql` is the phone flow after On the way. Apply it on LSP Operations after `20261104020000_owner_on_the_way.sql`.
+
+- I'm here, or the GPS fence, ends travel and starts access. Job start ends access and starts work. Those steps cannot be skipped.
+- Easy close and one-off close write an invoice **draft** and move the call to Complete. The draft is not sent.
+- Parts close requires a typed model and serial. Supplier and order number can stay blank. The call goes to Parts. Part in hand moves it to Ready.
+- Couldn't get in records the reason and puts the call back on the column it left (Assigned or Ready). The tech stays on it. The next trip is a return visit.
+- If an owner moves the card while the phone is offline, the board wins and the visit is flagged `offline_conflict`.
+
+The phone keeps a local draft and a queue (`local_draft` → `queued` → `synced`). Photos and the signature stay on the phone until that queue syncs. There is no Storage bucket yet, so the file row is `upload_state = local`.
+
+`npm run prove:rls` includes `supabase/tests/visit_proof.sql`.

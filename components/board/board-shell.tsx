@@ -12,6 +12,7 @@ import {
   softDeleteRequest,
 } from "@/app/actions/board"
 import { FeedbackSheet } from "@/components/board/feedback-sheet"
+import { useVisitFlush } from "@/components/visit/visit-sync"
 import { QuickAddSheet } from "@/components/board/quick-add"
 import { Sheet } from "@/components/board/sheet"
 import { Badge } from "@/components/ui/badge"
@@ -56,6 +57,11 @@ import {
   type BoardCatalog,
   type PendingQuickAdd,
 } from "@/lib/quick-add"
+import {
+  getVisitQueueServerSnapshot,
+  readVisitQueue,
+  subscribeVisitQueue,
+} from "@/lib/visit"
 
 type Filter = "all" | "mine"
 type Standpoint = "board" | "where"
@@ -92,6 +98,12 @@ export function BoardShell({
     readQuickAddQueue,
     getQuickAddQueueServerSnapshot,
   )
+  const visitQueue = useSyncExternalStore(
+    subscribeVisitQueue,
+    readVisitQueue,
+    getVisitQueueServerSnapshot,
+  )
+  useVisitFlush(() => router.refresh())
   const offline = useSyncExternalStore(subscribeOffline, getOfflineSnapshot, getOnlineServerSnapshot)
   const [flushToken, setFlushToken] = useState(0)
   const [quickAddOpen, setQuickAddOpen] = useState(false)
@@ -210,14 +222,23 @@ export function BoardShell({
       return
     }
     const mine =
+      viewer.profileId !== null && card.assignedUserId === viewer.profileId
+    if (mine && card.status === "in_progress") {
+      router.push(`/board/visit/${card.id}`)
+      return
+    }
+    if (card.status === "parts" && (mine || viewer.role === "owner")) {
+      router.push(`/board/visit/${card.id}`)
+      return
+    }
+    const mineStart =
       filter === "mine" &&
-      viewer.profileId !== null &&
-      card.assignedUserId === viewer.profileId &&
+      mine &&
       (card.status === "assigned" || card.status === "ready")
     setPanelError(null)
     setDetailNote(null)
     setDirectionsUrl(null)
-    setPanel({ kind: mine ? "enroute" : "detail", card })
+    setPanel({ kind: mineStart ? "enroute" : "detail", card })
   }
 
   async function confirmEnRoute(card: BoardCard) {
@@ -251,20 +272,8 @@ export function BoardShell({
         return
       }
       setNotice(outcome.notice)
-      if (outcome.closeSheet) {
-        setPanel(null)
-      } else {
-        setDirectionsUrl(outcome.mapsUrl)
-        setDetailNote(outcome.sheetNote)
-        setPanel({
-          kind: "detail",
-          card: {
-            ...card,
-            status: "in_progress",
-            address: outcome.address || card.address,
-          },
-        })
-      }
+      setPanel(null)
+      router.push(`/board/visit/${card.id}`)
       router.refresh()
     } catch {
       const message = "Could not start the drive. Check the signal and try again."
@@ -292,7 +301,7 @@ export function BoardShell({
               mode={viewer.mode}
               hasError={Boolean(loadError)}
               offline={offline}
-              pending={queue.length}
+              pending={queue.length + visitQueue.length}
             />
             <AccountMenu viewer={viewer} onReport={openFeedback} />
           </div>
