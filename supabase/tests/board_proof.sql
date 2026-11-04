@@ -464,6 +464,9 @@ begin
   from public.profiles
   where auth_user_id = '22222222-2222-4222-8222-222222222222';
 
+  -- Plants a working visit to test the parts trigger, not the visit steps.
+  perform set_config('app.visit_fixture', 'on', true);
+
   insert into public.service_visits (
     request_id, visit_seq, tech_user_id, visit_type, status
   ) values (
@@ -645,6 +648,8 @@ begin
   where auth_user_id = '22222222-2222-4222-8222-222222222222';
 
   perform public.assign_request(req, tech_id);
+  -- Plants en route without On the way, so unassign can see a visit past planned.
+  perform set_config('app.visit_fixture', 'on', true);
   update public.service_visits
   set status = 'en_route'
   where request_id = req
@@ -694,6 +699,8 @@ begin
   where auth_user_id = '22222222-2222-4222-8222-222222222222';
 
   perform public.assign_request(req, tech_id);
+  -- Plants a finished visit without the close gates, so unassign can see it.
+  perform set_config('app.visit_fixture', 'on', true);
   update public.service_visits
   set status = 'closed', closed_at = now()
   where request_id = req
