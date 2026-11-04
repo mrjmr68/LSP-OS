@@ -41,7 +41,12 @@ import {
   subscribeBoardStageView,
   writeBoardStageView,
 } from "@/lib/board-stage"
-import { crewStandpoint, mapsDirectionsUrl, ownerStatusNeedsReason } from "@/lib/board-rules"
+import {
+  crewStandpoint,
+  mapsDirectionsUrl,
+  ownerStatusNeedsReason,
+  runGoEnRoute,
+} from "@/lib/board-rules"
 import type { FeedbackContextInput } from "@/lib/feedback"
 import {
   getQuickAddQueueServerSnapshot,
@@ -54,6 +59,7 @@ import {
 
 type Filter = "all" | "mine"
 type Standpoint = "board" | "where"
+type EnRoutePhase = "location" | "save"
 type Panel =
   | { kind: "enroute" | "detail" | "repeat" | "status" | "assign" | "delete"; card: BoardCard }
   | null
@@ -99,6 +105,9 @@ export function BoardShell({
   const [panel, setPanel] = useState<Panel>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [panelError, setPanelError] = useState<string | null>(null)
+  const [detailNote, setDetailNote] = useState<string | null>(null)
+  const [directionsUrl, setDirectionsUrl] = useState<string | null>(null)
+  const [enRoutePhase, setEnRoutePhase] = useState<EnRoutePhase | null>(null)
   const [busy, setBusy] = useState(false)
   const revealCall = useRef<{ id: string; until: number } | null>(null)
   const [revealNonce, setRevealNonce] = useState(0)
@@ -206,33 +215,65 @@ export function BoardShell({
       card.assignedUserId === viewer.profileId &&
       (card.status === "assigned" || card.status === "ready")
     setPanelError(null)
+    setDetailNote(null)
+    setDirectionsUrl(null)
     setPanel({ kind: mine ? "enroute" : "detail", card })
   }
 
   async function confirmEnRoute(card: BoardCard) {
-    const popup = window.open("about:blank", "_blank")
     setBusy(true)
+    setEnRoutePhase("location")
     setPanelError(null)
-    const origin = await currentPosition()
-    const result = await goEnRoute({ requestId: card.id, origin })
-    setBusy(false)
-    if (!result.ok) {
-      popup?.close()
-      setPanelError(result.message)
-      return
+    setDetailNote(null)
+    setDirectionsUrl(null)
+    setNotice(null)
+    try {
+      const outcome = await runGoEnRoute({
+        fallbackAddress: card.address,
+        locate: currentPosition,
+        save: async (origin) => {
+          setEnRoutePhase("save")
+          const result = await goEnRoute({ requestId: card.id, origin })
+          if (!result.ok) {
+            return { ok: false, message: result.message }
+          }
+          return {
+            ok: true,
+            address: result.data.address,
+            notice: result.data.notice,
+          }
+        },
+        openMaps: openMapsTab,
+      })
+      if (!outcome.ok) {
+        setPanelError(outcome.message)
+        setNotice(outcome.message)
+        return
+      }
+      setNotice(outcome.notice)
+      if (outcome.closeSheet) {
+        setPanel(null)
+      } else {
+        setDirectionsUrl(outcome.mapsUrl)
+        setDetailNote(outcome.sheetNote)
+        setPanel({
+          kind: "detail",
+          card: {
+            ...card,
+            status: "in_progress",
+            address: outcome.address || card.address,
+          },
+        })
+      }
+      router.refresh()
+    } catch {
+      const message = "Could not start the drive. Check the signal and try again."
+      setPanelError(message)
+      setNotice(message)
+    } finally {
+      setBusy(false)
+      setEnRoutePhase(null)
     }
-    const url = mapsDirectionsUrl(result.data.address, origin)
-    if (popup) {
-      popup.location.href = url
-    } else {
-      window.open(url, "_blank", "noopener,noreferrer")
-    }
-    const locationNote = origin
-      ? ""
-      : " Location was off, so the text has no drive time."
-    setNotice(`${result.data.notice}${locationNote}`)
-    setPanel(null)
-    router.refresh()
   }
 
   return (
@@ -440,6 +481,7 @@ export function BoardShell({
       <EnRouteSheet
         card={visiblePanel?.kind === "enroute" ? visiblePanel.card : null}
         busy={busy}
+        phase={enRoutePhase}
         error={panelError}
         onClose={() => setPanel(null)}
         onConfirm={(card) => void confirmEnRoute(card)}
@@ -449,9 +491,17 @@ export function BoardShell({
         viewer={viewer}
         busy={busy}
         error={panelError}
-        onClose={() => setPanel(null)}
+        note={visiblePanel?.kind === "detail" ? detailNote : null}
+        directionsUrl={visiblePanel?.kind === "detail" ? directionsUrl : null}
+        onClose={() => {
+          setPanel(null)
+          setDetailNote(null)
+          setDirectionsUrl(null)
+        }}
         onEnRoute={(card) => {
           setPanelError(null)
+          setDetailNote(null)
+          setDirectionsUrl(null)
           setPanel({ kind: "enroute", card })
         }}
         onStatus={(card) => setPanel({ kind: "status", card })}
@@ -623,6 +673,26 @@ function currentPosition(): Promise<{ lat: number; lng: number } | null> {
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
     )
   })
+}
+
+function openMapsTab(url: string): boolean {
+  if (!url.startsWith("https://www.google.com/maps/")) {
+    return false
+  }
+  try {
+    const popup = window.open(url, "_blank")
+    if (!popup || popup.closed) {
+      return false
+    }
+    try {
+      popup.opener = null
+    } catch {
+      // Maps is another site. The tab is already open.
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 function CategoryColumn({
@@ -847,18 +917,24 @@ function CallCard({
 function EnRouteSheet({
   card,
   busy,
+  phase,
   error,
   onClose,
   onConfirm,
 }: {
   card: BoardCard | null
   busy: boolean
+  phase: EnRoutePhase | null
   error: string | null
   onClose: () => void
   onConfirm: (card: BoardCard) => void
 }) {
+  let label = "On the way"
+  if (busy) {
+    label = phase === "location" ? "Getting location…" : "Starting…"
+  }
   return (
-    <Sheet open={card !== null} title="Go en route?" onClose={onClose}>
+    <Sheet open={card !== null} title="On the way?" onClose={onClose}>
       {card ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm leading-6">
@@ -870,8 +946,19 @@ function EnRouteSheet({
               {error}
             </p>
           ) : null}
-          <Button type="button" size="field" disabled={busy} onClick={() => onConfirm(card)}>
-            {busy ? "Starting…" : "Go en route"}
+          {busy && phase === "location" ? (
+            <p aria-live="polite" className="text-sm leading-6 text-muted-foreground">
+              Stay on this page if Safari asks for location.
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            size="field"
+            disabled={busy}
+            aria-busy={busy}
+            onClick={() => onConfirm(card)}
+          >
+            {label}
           </Button>
         </div>
       ) : null}
@@ -884,6 +971,8 @@ function DetailSheet({
   viewer,
   busy,
   error,
+  note,
+  directionsUrl,
   onClose,
   onEnRoute,
   onStatus,
@@ -895,6 +984,8 @@ function DetailSheet({
   viewer: BoardViewer
   busy: boolean
   error: string | null
+  note: string | null
+  directionsUrl: string | null
   onClose: () => void
   onEnRoute: (card: BoardCard) => void
   onStatus: (card: BoardCard) => void
@@ -926,15 +1017,36 @@ function DetailSheet({
           {card.repeatCalls.length > 0 ? (
             <p>Repeat unit. {card.repeatCalls.length} other {card.repeatCalls.length === 1 ? "call" : "calls"} in the last two weeks.</p>
           ) : null}
+          {note ? (
+            <p role="status" className="text-sm leading-6">
+              {note}
+            </p>
+          ) : null}
           <div className="flex flex-col gap-2">
+            {directionsUrl ? (
+              <Button
+                render={
+                  <a href={directionsUrl} target="_blank" rel="noreferrer" />
+                }
+                size="field"
+              >
+                Open in Maps
+              </Button>
+            ) : null}
             {card.contactPhone ? (
               <Button render={<a href={`tel:${card.contactPhone}`} />} size="field">
                 Call {card.contactName}
               </Button>
             ) : null}
-            {card.address ? (
+            {!directionsUrl && card.address ? (
               <Button
-                render={<a href={mapsDirectionsUrl(card.address)} target="_blank" rel="noreferrer" />}
+                render={
+                  <a
+                    href={mapsDirectionsUrl(card.address)}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                }
                 variant="outline"
                 size="field"
               >
@@ -943,7 +1055,7 @@ function DetailSheet({
             ) : null}
             {mine ? (
               <Button type="button" size="field" onClick={() => onEnRoute(card)}>
-                Go en route
+                On the way
               </Button>
             ) : null}
             {viewer.role === "owner" ? (

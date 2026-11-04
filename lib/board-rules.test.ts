@@ -18,6 +18,7 @@ import {
   ownerStatusNeedsReason,
   pairNeedsLink,
   quickAddMissing,
+  runGoEnRoute,
 } from "./board-rules"
 
 test("owner status switch asks for a reason only when a step is skipped", () => {
@@ -82,6 +83,146 @@ test("maps url carries the address and the tech origin", () => {
   assert.match(url, /^https:\/\/www\.google\.com\/maps\/dir\//)
   assert.match(url, /destination=100\+Oak\+Court/)
   assert.match(url, /origin=37\.5%2C-77\.4/)
+  const destinationOnly = mapsDirectionsUrl("100 Oak Court, Richmond, VA 23220", null)
+  assert.equal(destinationOnly.includes("origin="), false)
+})
+
+const oak = "100 Oak Court, Richmond, VA 23220"
+
+test("go en route asks for location before it opens maps", async () => {
+  const events: string[] = []
+  let release: (origin: { lat: number; lng: number }) => void = () => {}
+  const pendingLocation = new Promise<{ lat: number; lng: number }>((resolve) => {
+    release = resolve
+  })
+  const pending = runGoEnRoute({
+    fallbackAddress: oak,
+    locate: () => {
+      events.push("location")
+      return pendingLocation
+    },
+    save: async (origin) => {
+      events.push(`save:${origin?.lat ?? "none"}`)
+      return { ok: true, address: oak, notice: "ETA text queued." }
+    },
+    openMaps: (url) => {
+      events.push("maps")
+      assert.equal(url.includes("about:blank"), false)
+      assert.match(url, /^https:\/\/www\.google\.com\/maps\/dir\//)
+      assert.match(url, /origin=37\.5%2C-77\.4/)
+      return true
+    },
+  })
+  await Promise.resolve()
+  assert.deepEqual(events, ["location"])
+  release({ lat: 37.5, lng: -77.4 })
+  const outcome = await pending
+  assert.deepEqual(events, ["location", "save:37.5", "maps"])
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) {
+    return
+  }
+  assert.equal(outcome.notice, "ETA text queued.")
+  assert.equal(outcome.closeSheet, true)
+  assert.equal(outcome.sheetNote, null)
+})
+
+test("denied location still goes en route and keeps maps on the call", async () => {
+  let opened = false
+  const outcome = await runGoEnRoute({
+    fallbackAddress: oak,
+    locate: async () => null,
+    save: async (origin) => {
+      assert.equal(origin, null)
+      return { ok: true, address: `  ${oak}  `, notice: "On the way." }
+    },
+    openMaps: (url) => {
+      opened = true
+      assert.equal(url.includes("origin="), false)
+      assert.equal(url.includes("about:blank"), false)
+      return false
+    },
+  })
+  assert.equal(opened, true)
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) {
+    return
+  }
+  assert.equal(
+    outcome.notice,
+    "On the way. Location was off, so the text has no drive time.",
+  )
+  assert.equal(outcome.closeSheet, false)
+  assert.equal(
+    outcome.sheetNote,
+    "On the way. Location was off, so the text has no drive time. Tap Open in Maps.",
+  )
+  assert.equal(outcome.address, oak)
+})
+
+test("a call that already started still opens maps from this page", async () => {
+  const outcome = await runGoEnRoute({
+    fallbackAddress: oak,
+    locate: async () => ({ lat: 37.5, lng: -77.4 }),
+    save: async () => ({ ok: false, message: "This call is not ready to start." }),
+    openMaps: (url) => {
+      assert.match(url, /origin=37\.5%2C-77\.4/)
+      return false
+    },
+  })
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) {
+    return
+  }
+  assert.equal(
+    outcome.notice,
+    "This call is already In Progress.",
+  )
+  assert.equal(
+    outcome.sheetNote,
+    "This call is already In Progress. Open it in Maps below.",
+  )
+  assert.equal(outcome.closeSheet, false)
+})
+
+test("a call that already started without location says maps has no start point", async () => {
+  const outcome = await runGoEnRoute({
+    fallbackAddress: oak,
+    locate: async () => ({ lat: Number.NaN, lng: -77.4 }),
+    save: async () => ({
+      ok: false,
+      message: "ERROR: 42501: This call is not ready to start.",
+    }),
+    openMaps: () => true,
+  })
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) {
+    return
+  }
+  assert.equal(outcome.closeSheet, true)
+  assert.equal(
+    outcome.notice,
+    "This call is already In Progress. Location was off, so Maps has no start point.",
+  )
+  assert.equal(outcome.mapsUrl.includes("origin="), false)
+})
+
+test("another save error does not open maps", async () => {
+  let opened = false
+  const outcome = await runGoEnRoute({
+    fallbackAddress: oak,
+    locate: async () => ({ lat: 37.5, lng: -77.4 }),
+    save: async () => ({ ok: false, message: "Sign in again to change the board." }),
+    openMaps: () => {
+      opened = true
+      return true
+    },
+  })
+  assert.equal(opened, false)
+  assert.deepEqual(outcome, {
+    ok: false,
+    message: "Sign in again to change the board.",
+  })
 })
 
 test("distance matrix minutes round up from seconds", () => {

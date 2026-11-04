@@ -99,6 +99,138 @@ export function mapsDirectionsUrl(
   return `https://www.google.com/maps/dir/?${params.toString()}`
 }
 
+const EN_ROUTE_NOT_READY = "This call is not ready to start."
+const LOCATION_OFF_NOTE = " Location was off, so the text has no drive time."
+const MAPS_NO_START_NOTE = " Location was off, so Maps has no start point."
+
+export type EnRoutePoint = { lat: number; lng: number }
+
+export type EnRouteServerResult =
+  | { ok: true; address: string; notice: string }
+  | { ok: false; message: string }
+
+export type EnRouteOutcome =
+  | { ok: false; message: string }
+  | {
+      ok: true
+      mapsUrl: string
+      address: string
+      notice: string
+      closeSheet: boolean
+      sheetNote: string | null
+    }
+
+function usableOrigin(origin: EnRoutePoint | null): EnRoutePoint | null {
+  if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
+    return null
+  }
+  return origin
+}
+
+/**
+ * What the Board shows after location has already resolved.
+ * Maps is a directions URL only. Never a blank tab.
+ * A call that is already In Progress still gets that link.
+ */
+export function enRouteOutcome(input: {
+  fallbackAddress: string
+  origin: EnRoutePoint | null
+  server: EnRouteServerResult
+  mapsOpened: boolean
+}): EnRouteOutcome {
+  const origin = usableOrigin(input.origin)
+  const locationNote = origin ? "" : LOCATION_OFF_NOTE
+
+  if (!input.server.ok) {
+    if (!input.server.message.includes(EN_ROUTE_NOT_READY)) {
+      return { ok: false, message: input.server.message }
+    }
+    const address = input.fallbackAddress
+    const mapsUrl = mapsDirectionsUrl(address, origin)
+    const lead = "This call is already In Progress."
+    const mapsNote = origin ? "" : MAPS_NO_START_NOTE
+    if (input.mapsOpened) {
+      return {
+        ok: true,
+        mapsUrl,
+        address,
+        notice: `${lead}${mapsNote}`,
+        closeSheet: true,
+        sheetNote: null,
+      }
+    }
+    return {
+      ok: true,
+      mapsUrl,
+      address,
+      notice: `${lead}${mapsNote}`,
+      closeSheet: false,
+      sheetNote: `${lead} Open it in Maps below.${mapsNote}`,
+    }
+  }
+
+  const address = input.server.address.trim() || input.fallbackAddress
+  const mapsUrl = mapsDirectionsUrl(address, origin)
+  const notice = `${input.server.notice}${locationNote}`
+  if (input.mapsOpened) {
+    return {
+      ok: true,
+      mapsUrl,
+      address,
+      notice,
+      closeSheet: true,
+      sheetNote: null,
+    }
+  }
+  return {
+    ok: true,
+    mapsUrl,
+    address,
+    notice,
+    closeSheet: false,
+    sheetNote: `${notice} Tap Open in Maps.`,
+  }
+}
+
+/**
+ * Location first, while the Board is still the open page, then save, then Maps.
+ * iOS Safari ties the location prompt to the visible tab, so a blank popup
+ * opened first makes Allow or Deny stick to the wrong page.
+ */
+export async function runGoEnRoute(input: {
+  fallbackAddress: string
+  locate: () => Promise<EnRoutePoint | null>
+  save: (origin: EnRoutePoint | null) => Promise<EnRouteServerResult>
+  openMaps: (url: string) => boolean
+}): Promise<EnRouteOutcome> {
+  const origin = await input.locate()
+  const server = await input.save(origin)
+  const opened = enRouteOutcome({
+    fallbackAddress: input.fallbackAddress,
+    origin,
+    server,
+    mapsOpened: true,
+  })
+  if (!opened.ok) {
+    return opened
+  }
+  let mapsOpened = false
+  try {
+    mapsOpened = input.openMaps(opened.mapsUrl)
+  } catch {
+    mapsOpened = false
+  }
+  if (mapsOpened) {
+    return opened
+  }
+  return enRouteOutcome({
+    fallbackAddress: input.fallbackAddress,
+    origin,
+    server,
+    mapsOpened: false,
+  })
+}
+
 export function haversineMiles(
   fromLat: number,
   fromLng: number,

@@ -376,5 +376,8 @@ function actionMessage(message: string): string {
   if (/relation |syntax error|schema cache|stack|jwt|permission denied for/i.test(line)) {
     return "Could not save. Apply the latest database migration, then try again."
   }
+  if (line.includes("Only the assigned tech can go en route.")) {
+    return "Only the assigned tech can mark this call On the way."
+  }
   return line.slice(0, 240)
 }

@@ -99,7 +99,7 @@ All jobs / My jobs is on the shell. **+ Quick Add** asks for contact, property, 
 
 An owner assigns a tech, sets High (nothing is texted), switches status, or deletes a duplicate. A skipped status needs a reason. A tech does not get those controls.
 
-My jobs, then the assigned call: **Go en route** moves it to In Progress, starts travel, queues an ETA text when the contact has a phone and texts are on, and opens Google Maps. No phone still moves the call and opens Maps.
+My jobs, then the assigned call: **On the way** moves it to In Progress, starts travel, queues an ETA text when the contact has a phone and texts are on, and opens Google Maps. No phone still moves the call and opens Maps.
 
 A unit with another call in the last 14 days shows **Repeat**. Open it for the dates and bundle codes. That history is real service requests, not the legacy import.
 

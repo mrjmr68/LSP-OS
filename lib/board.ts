@@ -2,7 +2,7 @@ export const BOARD_CATEGORIES = [
   { status: "new", label: "New", hint: "Not triaged yet" },
   { status: "assigned", label: "Assigned", hint: "A tech has the first stop" },
   { status: "ready", label: "Ready", hint: "Nothing blocking it" },
-  { status: "in_progress", label: "In Progress", hint: "En route or on site" },
+  { status: "in_progress", label: "In Progress", hint: "On the way or on site" },
   { status: "to_estimate", label: "To Estimate", hint: "Estimate is being built" },
   { status: "estimate_out", label: "Estimate Out", hint: "Waiting on the property" },
   { status: "parts", label: "Parts", hint: "Ordered, return visit pending" },
