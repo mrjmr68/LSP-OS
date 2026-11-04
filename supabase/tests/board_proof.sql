@@ -837,3 +837,108 @@ begin
 end
 $proof$;
 rollback;
+
+-- ---------------------------------------------------------------------------
+-- A1 for an owner on their own call. Status switch still needs a reason.
+-- Another person's call still rejects the owner.
+-- ---------------------------------------------------------------------------
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+
+do $proof$
+declare
+  owner_id uuid;
+  tech_id uuid;
+  req uuid := '77777777-7777-4777-8777-777777777777';
+  result jsonb;
+begin
+  select id into owner_id
+  from public.profiles
+  where auth_user_id = '11111111-1111-4111-8111-111111111111';
+  select id into tech_id
+  from public.profiles
+  where auth_user_id = '22222222-2222-4222-8222-222222222222';
+
+  perform public.assign_request(req, tech_id);
+
+  begin
+    perform public.go_en_route(req, null);
+    raise exception 'FAIL: owner went on the way for someone else''s call';
+  exception
+    when others then
+      if sqlerrm like 'FAIL:%' then
+        raise;
+      end if;
+      if sqlerrm not like '%Only the assigned tech can go en route.%' then
+        raise exception 'FAIL: expected assigned-tech rejection, got: %', sqlerrm;
+      end if;
+  end;
+
+  if (select board_status from public.service_requests where id = req) <> 'assigned' then
+    raise exception 'FAIL: rejected On the way changed the other person''s call';
+  end if;
+
+  perform public.assign_request(req, owner_id);
+
+  begin
+    perform public.set_board_status(req, 'in_progress', null);
+    raise exception 'FAIL: owner status switch skipped to in progress without a reason';
+  exception
+    when others then
+      if sqlerrm like 'FAIL:%' then
+        raise;
+      end if;
+      if sqlerrm not like '%needs a reason%' then
+        raise exception 'FAIL: expected a reason error, got: %', sqlerrm;
+      end if;
+  end;
+
+  if (select board_status from public.service_requests where id = req) <> 'assigned' then
+    raise exception 'FAIL: status switch without a reason moved the call';
+  end if;
+
+  result := public.go_en_route(req, null);
+
+  if (select board_status from public.service_requests where id = req) <> 'in_progress' then
+    raise exception 'FAIL: owner On the way did not move the call to in progress';
+  end if;
+  if (
+    select count(*) from public.service_visits
+    where request_id = req
+      and tech_user_id = owner_id
+      and status = 'en_route'
+  ) <> 1 then
+    raise exception 'FAIL: owner On the way did not start the visit';
+  end if;
+  if (
+    select count(*) from public.time_segments t
+    join public.service_visits v on v.id = t.visit_id
+    where v.request_id = req
+      and t.kind = 'travel'
+      and t.ended_at is null
+      and t.start_source = 'tap'
+  ) <> 1 then
+    raise exception 'FAIL: owner On the way did not start travel';
+  end if;
+  if (
+    select count(*) from public.status_events
+    where request_id = req
+      and from_status = 'assigned'
+      and to_status = 'in_progress'
+      and trigger = 'my_jobs_tap'
+      and actor_id = owner_id
+  ) <> 1 then
+    raise exception 'FAIL: owner On the way did not log my_jobs_tap';
+  end if;
+  if result ->> 'sms' <> 'queued' then
+    raise exception 'FAIL: owner On the way did not queue the ETA text, got %', result ->> 'sms';
+  end if;
+  if coalesce(result ->> 'notice', '') not like 'ETA text queued%' then
+    raise exception 'FAIL: owner On the way notice was %', result ->> 'notice';
+  end if;
+  raise notice 'PASS: owner on their own call can go On the way; status switch still needs a reason';
+end
+$proof$;
+rollback;

@@ -23,7 +23,7 @@ Format: from → to (who, trigger)
 | in_progress | ready | owner | unassign; the active visit is cancelled so the call is not in progress with no tech |
 | ready | ready | owner | unassign clears the tech only |
 | new, to_estimate, estimate_out, parts, complete, invoiced, closed | same status | owner | unassign clears the tech only |
-| assigned / ready | in_progress | assigned tech (A1) | taps job in My Jobs (en route) |
+| assigned / ready | in_progress | assigned person, owner or tech (A1) | On the way. Not a status-switch skip, so no reason. |
 | in_progress | complete | system (A2) | invoice drafted on visit close (easy / one-off path satisfied) |
 | in_progress | parts | tech / system (A4) | closes visit on parts path (model+serial typed); or part order info entered |
 | in_progress | to_estimate | tech | closes visit on estimate path |

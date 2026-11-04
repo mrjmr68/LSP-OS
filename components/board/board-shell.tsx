@@ -938,8 +938,9 @@ function EnRouteSheet({
       {card ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm leading-6">
-            {card.propertyName} · {card.unitLabel}. {card.issue}. This moves the call to In
-            Progress, texts an ETA when the contact can take one, and opens Maps.
+            {card.propertyName} · {card.unitLabel}. {card.issue}. You&apos;re heading
+            there. The call moves to In Progress, the contact gets a text when texts
+            are on, and Maps opens. With location off, the text has no drive time.
           </p>
           {error ? (
             <p role="alert" className="text-sm text-destructive">
