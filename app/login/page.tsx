@@ -57,6 +57,11 @@ export default async function LoginPage({
         ) : null}
 
         {configured ? <LoginForm /> : <SetupChecklist />}
+        {configured ? (
+          <Link href="/login/forgot" className="text-sm underline">
+            Forgot password?
+          </Link>
+        ) : null}
       </div>
     </main>
   )

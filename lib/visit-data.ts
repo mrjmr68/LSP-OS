@@ -193,7 +193,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         .eq("status", "active")
         .order("code"),
       supabase.from("bundle_lines").select("bundle_id, description, kind").eq("kind", "part"),
-      supabase.from("suppliers").select("id, name, phone, email").order("name"),
+      supabase.from("suppliers").select("id, name, phone, email").eq("active", true).order("name"),
     ])
 
   const visits = (visitsResult.data ?? []) as VisitRow[]

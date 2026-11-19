@@ -157,3 +157,189 @@ export async function loadCustomers(supabase: Supabase): Promise<SetupCustomer[]
   }
   return data as SetupCustomer[]
 }
+
+// ---------------------------------------------------------------------------
+// Suppliers, contacts, customers, team
+// ---------------------------------------------------------------------------
+
+export type SetupSupplier = {
+  id: string
+  name: string
+  branch: string | null
+  phone: string | null
+  email: string | null
+  notes: string | null
+  active: boolean
+}
+
+export async function loadSuppliers(supabase: Supabase): Promise<SetupSupplier[]> {
+  const { data, error } = await supabase
+    .from("suppliers")
+    .select("id, name, branch, phone, email, notes, active")
+    .order("name")
+  if (error) throw new Error("Suppliers could not be loaded.")
+  return data as SetupSupplier[]
+}
+
+export type SetupContact = {
+  id: string
+  customerId: string
+  customerName: string
+  name: string
+  title: string | null
+  phone: string | null
+  email: string | null
+  smsOk: boolean
+  active: boolean
+  propertyIds: string[]
+}
+
+type ContactRow = {
+  id: string
+  customer_id: string
+  name: string
+  title: string | null
+  phone: string | null
+  email: string | null
+  sms_ok: boolean
+  active: boolean
+  customers: { name: string } | { name: string }[] | null
+  contact_properties: { property_id: string }[] | null
+}
+
+export async function loadContacts(supabase: Supabase): Promise<SetupContact[]> {
+  const { data, error } = await supabase
+    .from("customer_contacts")
+    .select(
+      "id, customer_id, name, title, phone, email, sms_ok, active, customers ( name ), contact_properties ( property_id )",
+    )
+    .order("name")
+  if (error) throw new Error("Contacts could not be loaded.")
+  return (data as ContactRow[]).map((r) => {
+    const customer = Array.isArray(r.customers) ? r.customers[0] : r.customers
+    return {
+      id: r.id,
+      customerId: r.customer_id,
+      customerName: customer?.name ?? "",
+      name: r.name,
+      title: r.title,
+      phone: r.phone,
+      email: r.email,
+      smsOk: r.sms_ok,
+      active: r.active,
+      propertyIds: (r.contact_properties ?? []).map((l) => l.property_id),
+    }
+  })
+}
+
+export type SetupCustomerFull = {
+  id: string
+  name: string
+  billingContactId: string
+  billingEmailOverride: string | null
+  paymentTermsDays: number
+  siteAccessText: string | null
+  addonApprovalMode: string
+  addonApprovalLimitCents: number | null
+  addonApprovalNotes: string | null
+  signoffRequirement: string
+  signoffNotes: string | null
+  residentReportMode: string
+  residentReportNotes: string | null
+  requiresEstimateOverCents: number | null
+  active: boolean
+  activeProperties: number
+}
+
+type CustomerRow = {
+  id: string
+  name: string
+  billing_contact_id: string
+  billing_email_override: string | null
+  payment_terms_days: number
+  site_access_text: string | null
+  addon_approval_mode: string
+  addon_approval_limit_cents: number | null
+  addon_approval_notes: string | null
+  signoff_requirement: string
+  signoff_notes: string | null
+  resident_report_mode: string
+  resident_report_notes: string | null
+  requires_estimate_over_cents: number | null
+  active: boolean
+  properties: { active: boolean }[] | null
+}
+
+export async function loadCustomersFull(supabase: Supabase): Promise<SetupCustomerFull[]> {
+  const { data, error } = await supabase
+    .from("customers")
+    .select(
+      `id, name, billing_contact_id, billing_email_override, payment_terms_days, site_access_text,
+       addon_approval_mode, addon_approval_limit_cents, addon_approval_notes,
+       signoff_requirement, signoff_notes, resident_report_mode, resident_report_notes,
+       requires_estimate_over_cents, active, properties ( active )`,
+    )
+    .order("name")
+  if (error) throw new Error("Customers could not be loaded.")
+  return (data as CustomerRow[]).map((r) => ({
+    id: r.id,
+    name: r.name,
+    billingContactId: r.billing_contact_id,
+    billingEmailOverride: r.billing_email_override,
+    paymentTermsDays: r.payment_terms_days,
+    siteAccessText: r.site_access_text,
+    addonApprovalMode: r.addon_approval_mode,
+    addonApprovalLimitCents: r.addon_approval_limit_cents,
+    addonApprovalNotes: r.addon_approval_notes,
+    signoffRequirement: r.signoff_requirement,
+    signoffNotes: r.signoff_notes,
+    residentReportMode: r.resident_report_mode,
+    residentReportNotes: r.resident_report_notes,
+    requiresEstimateOverCents: r.requires_estimate_over_cents,
+    active: r.active,
+    activeProperties: (r.properties ?? []).filter((p) => p.active).length,
+  }))
+}
+
+export type SetupTeamMember = {
+  id: string
+  fullName: string
+  email: string
+  phone: string
+  truckLabel: string | null
+  role: "owner" | "tech"
+  active: boolean
+  isMe: boolean
+}
+
+export async function loadTeam(supabase: Supabase): Promise<SetupTeamMember[]> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, auth_user_id, full_name, email, phone, truck_label, role, active")
+    .order("full_name")
+  if (error) throw new Error("The team could not be loaded.")
+  return (
+    data as {
+      id: string
+      auth_user_id: string
+      full_name: string
+      email: string
+      phone: string
+      truck_label: string | null
+      role: "owner" | "tech"
+      active: boolean
+    }[]
+  ).map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    email: r.email,
+    phone: r.phone === "unset" ? "" : r.phone,
+    truckLabel: r.truck_label,
+    role: r.role,
+    active: r.active,
+    isMe: r.auth_user_id === user?.id,
+  }))
+}
