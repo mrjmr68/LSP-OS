@@ -114,7 +114,7 @@ export function PinMap({
       ref={box}
       role="application"
       aria-label="Map. Tap to place the pin, or drag it."
-      className="h-72 w-full overflow-hidden rounded-xl border border-border lg:h-[420px]"
+      className="relative isolate z-0 h-72 w-full overflow-hidden rounded-xl border border-border lg:h-[420px]"
     />
   )
 }

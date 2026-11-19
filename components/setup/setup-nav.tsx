@@ -2,14 +2,27 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { Suspense } from "react"
 
 const SECTIONS = [
   { href: "/setup/properties", label: "Properties" },
   { href: "/setup/tax-rates", label: "Tax rates" },
 ] as const
 
+/** The highlight needs the current address, so it streams in after the page shell. */
 export function SetupNav() {
-  const pathname = usePathname()
+  return (
+    <Suspense fallback={<NavLinks pathname="" />}>
+      <CurrentNav />
+    </Suspense>
+  )
+}
+
+function CurrentNav() {
+  return <NavLinks pathname={usePathname()} />
+}
+
+function NavLinks({ pathname }: { pathname: string }) {
   return (
     <nav aria-label="Setup sections" className="flex gap-1 overflow-x-auto">
       {SECTIONS.map((s) => {
