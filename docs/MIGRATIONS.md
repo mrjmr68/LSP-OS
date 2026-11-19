@@ -19,6 +19,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261119120000_v1_foundation.sql` | NC county sales tax table (100 counties, NCDOR rates effective 2026-07-01) and a county on each property that sets its tax rate; latest tech position for the Board crew strip; a tech's own My Jobs order. |
 | `20261119140000_sms_consent.sql` | SMS consent records for the Twilio A2P campaign. Signed-out people record consent through `record_sms_consent()` (the `/text-updates` page); only owners can read the records. Each row keeps the exact wording agreed to. |
 | `20261119150000_setup_people.sql` | Setup screens: `suppliers.active` (retire a supplier), owners may unlink a contact from a property, a trigger that always keeps one active owner, and `create_customer()` which adds a customer with its billing contact in one step. |
+| `20261119160000_setup_people_no_anon.sql` | Removes signed-out access to `create_customer()` and the owner-guard trigger function. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
