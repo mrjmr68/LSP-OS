@@ -27,7 +27,8 @@ import { mapsDirectionsUrl, runGoEnRoute } from "@/lib/board-rules"
 import type { VisitBundle, VisitModel, VisitPart, VisitSelection, VisitSupplier } from "@/lib/visit-data"
 import {
   ATTEMPT_REASONS,
-  CLOSE_PATHS,
+  READING_FIELDS,
+  readingsCount,
   attemptGaps,
   clearVisitDraft,
   closeGaps,
@@ -67,6 +68,7 @@ type Step =
   | "done"
   | "attempt_done"
   | "summary"
+  | "readings"
 
 export function VisitFlow({
   model,
@@ -130,6 +132,8 @@ function VisitSession({
   const [bundleId, setBundleId] = useState<string | null>(initial.bundleId)
   const [photos, setPhotos] = useState<string[]>(() => readVisitPhotos(model.requestId))
   const [query, setQuery] = useState("")
+  // null = follow the suggestion; true/false = the tech switched it.
+  const [estimateChoice, setEstimateChoice] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -188,9 +192,25 @@ function VisitSession({
   const canParts = mine || model.viewerRole === "owner"
   const queuedHere = queue.filter((item) => item.requestId === model.requestId).length
   const sync = syncLabel({ offline, queued: queuedHere, conflict })
-  // Once a repair is picked, a job with no other path is a simple repair.
-  const closePath: ClosePath | null =
-    path ?? (picks.length > 0 ? (picks.some((p) => p.oneShot) ? "parts" : "easy") : null)
+  // The picked repairs decide what close asks for. A part-needing repair
+  // means Parts; a change-out or a total over the property's limit suggests
+  // an estimate (the tech can switch it); otherwise a simple repair.
+  const partRepairs = picks.filter((p) => p.oneShot)
+  const partText = partDescription.trim() || partRepairs.map((p) => p.title).join("; ")
+  const pickTotal = picks.reduce((sum, p) => sum + p.priceCents, 0)
+  const suggestEstimate =
+    picks.some((p) => /change\s*-?\s*out/i.test(p.title)) ||
+    (model.estimateOverCents !== null && picks.length > 0 && pickTotal > model.estimateOverCents)
+  const asEstimate = estimateChoice ?? suggestEstimate
+  const closePath: ClosePath | null = asEstimate && picks.length > 0
+    ? "estimate"
+    : partRepairs.length > 0
+      ? "parts"
+      : path === "one_off"
+        ? "one_off"
+        : picks.length > 0
+          ? "easy"
+          : path
   const pickedBundles = picks
     .map((p) => bundles.find((b) => b.id === p.bundleId))
     .filter((b): b is VisitBundle => Boolean(b))
@@ -206,7 +226,7 @@ function VisitSession({
     signoffName,
     hasSignature: Boolean(signature) || model.visit?.hasSignature === true,
     photoCount: model.photoCount + photos.length,
-    partDescription,
+    partDescription: partText,
   })
 
   useEffect(() => {
@@ -421,15 +441,7 @@ function VisitSession({
     setNotice(result === "queued" ? "Saved on this phone. The call stays open." : "Couldn't get in. The call stays open.")
   }
 
-  function choosePath(next: ClosePath) {
-    setPath(next)
-    setFormError(null)
-    if (next === "easy") {
-      setStep("bundle")
-      return
-    }
-    setStep("diagnose")
-  }
+
 
   async function addRepair(bundle: VisitBundle) {
     if (picks.some((p) => p.bundleId === bundle.id)) {
@@ -473,14 +485,8 @@ function VisitSession({
     ])
     setBundleId(bundle.id)
     setQuery("")
-    if (bundle.oneShot) {
-      setPath("parts")
-      setNotice("That repair needs a part. Model and serial are required before you leave.")
-      setStep("parts")
-    } else {
-      setPath((current) => (current === "estimate" || current === "parts" ? current : "easy"))
-      setStep("close")
-    }
+    setPath((current) => (current === "one_off" ? null : current))
+    setStep("close")
     if (result !== "queued") {
       router.refresh()
     }
@@ -623,7 +629,7 @@ function VisitSession({
       signoffName,
       oneOffNarrative: narrative,
       materials,
-      partDescription,
+      partDescription: partText,
       supplierId: supplier,
       supplierContact: contact,
       orderNumber: order,
@@ -642,7 +648,7 @@ function VisitSession({
         signoffName,
         oneOffNarrative: narrative,
         materials,
-        partDescription,
+        partDescription: partText,
         supplierId: supplier,
         supplierContact: contact,
         orderNumber: order,
@@ -781,7 +787,7 @@ function VisitSession({
     : quick
   const total = picks.reduce((sum, p) => sum + p.priceCents, 0)
   const context = `${model.propertyName} · ${model.unitLabel} · ${model.issue}`
-  const isHub = step === "arrival" || step === "bundle" || (step === "diagnose" && !path)
+  const isHub = step === "arrival" || step === "bundle" || step === "diagnose"
   const addingAnother = picks.length > 0
 
   // One primary action per screen, pinned to the bottom.
@@ -820,7 +826,11 @@ function VisitSession({
           {busy ? "Closing…" : "Close visit"}
         </BigButton>
         <p className="text-center text-[13px] text-muted-foreground">
-          {path === "estimate" ? "Sends the estimate draft to owner review" : "Sends the draft to owner review"}
+          {closePath === "estimate"
+            ? "Sends the estimate draft to owner review"
+            : closePath === "parts"
+              ? "Moves the job to Parts"
+              : "Sends the draft to owner review"}
           {model.nextJob ? ` · Next: ${model.nextJob.title}` : ""}
         </p>
       </>
@@ -944,59 +954,57 @@ function VisitSession({
                 })}
               </ul>
             )}
-            {!addingAnother ? (
-              <div className="grid grid-cols-2 gap-2">
-                <SoftButton disabled={busy} onClick={() => { setAttemptReason("no_access"); setAttemptOpen(true) }}>
-                  No access
-                </SoftButton>
-                <SoftButton
-                  disabled={busy}
-                  onClick={() => {
-                    setPath("one_off")
-                    void ensureWorking().then((ok) => ok && setStep("close"))
-                  }}
-                >
-                  One-off repair
-                </SoftButton>
-              </div>
-            ) : (
-              <button type="button" onClick={() => setStep("close")} className="min-h-11 self-start text-[15px] font-semibold text-primary underline">
-                Back to close
-              </button>
-            )}
+            <div className="mt-1 flex flex-col items-start gap-1">
+              <QuietLink onClick={() => setStep("readings")}>
+                {readingsCount(readings) > 0 ? `Readings · ${readingsCount(readings)} taken` : "Take readings"}
+              </QuietLink>
+              <QuietLink
+                onClick={() => {
+                  setPath("one_off")
+                  void ensureWorking().then((ok) => ok && setStep("close"))
+                }}
+              >
+                No repair fits? Describe it
+              </QuietLink>
+              {addingAnother ? (
+                <QuietLink onClick={() => setStep("close")}>Back to close</QuietLink>
+              ) : (
+                <QuietLink onClick={() => { setAttemptReason("no_access"); setAttemptOpen(true) }}>
+                  Couldn&apos;t get in
+                </QuietLink>
+              )}
+            </div>
           </>
         ) : null}
 
-        {/* Need a part / Estimate: the existing guided fields, one step each */}
-        {step === "diagnose" && path ? (
+        {/* ---------------- Readings (its own screen) ---------------- */}
+        {step === "readings" ? (
           <section className="flex flex-col gap-3">
             <p className="text-sm font-semibold text-muted-foreground">{context}</p>
-            <h1 className="text-[30px] leading-tight font-extrabold">
-              {path === "parts" ? "Need a part" : path === "estimate" ? "Estimate" : CLOSE_PATHS.find((c) => c.id === path)?.label}
-            </h1>
-            <GuidedFields
-              path={path}
-              modelText={modelText}
-              serial={serial}
-              equipmentSize={equipmentSize}
-              readings={readings}
-              onModel={setModelText}
-              onSerial={setSerial}
-              onSize={setEquipmentSize}
-              onReadings={setReadings}
-              onPhoto={(url, kind) => void addPhoto(model.requestId, url, kind, photos, setPhotos, setFormError)}
-            />
-            <BigButton onClick={() => setStep(path === "one_off" ? "close" : "bundle")}>
-              {path === "one_off" ? "Continue to close" : "Pick the repair"}
-            </BigButton>
-            <button type="button" onClick={() => { setPath(picks.length > 0 ? "easy" : null); setStep(picks.length > 0 ? "close" : "bundle") }} className="min-h-11 self-start text-[15px] text-muted-foreground underline">
-              Back
-            </button>
+            <h1 className="text-[30px] leading-tight font-extrabold">Readings</h1>
+            <p className="text-[15px] text-muted-foreground">Take what you can. Any can be left blank.</p>
+            <div className="grid grid-cols-2 gap-3">
+              {READING_FIELDS.map((field) => (
+                <label key={field.key} className="flex flex-col gap-1">
+                  <span className="text-[15px] font-semibold">{field.label}</span>
+                  <span className="flex items-center gap-2">
+                    <Input
+                      inputMode="decimal"
+                      value={readings[field.key]}
+                      onChange={(event) => setReadings({ ...readings, [field.key]: event.target.value })}
+                      className="h-14 rounded-xl border-2 border-ink/70 text-xl tabular-nums"
+                    />
+                    <span className="w-8 shrink-0 text-[15px] text-muted-foreground">{field.unit}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <BigButton onClick={() => setStep(picks.length > 0 ? "close" : "bundle")}>Done</BigButton>
           </section>
         ) : null}
 
         {/* Parts form (Stage 4 restyles this) */}
-        {step === "parts" || (step === "parts_desk" && canParts) ? (
+        {step === "parts_desk" && canParts ? (
           <PartsForm
             modelText={modelText}
             serial={serial}
@@ -1014,9 +1022,6 @@ function VisitSession({
             onEta={setExpectedDelivery}
             onOwnerFinish={setOwnerWillFinish}
           />
-        ) : null}
-        {step === "parts" ? (
-          <BigButton onClick={() => setStep("close")}>Continue to close</BigButton>
         ) : null}
         {step === "parts_desk" && canParts ? (
           <>
@@ -1044,10 +1049,10 @@ function VisitSession({
             <p className="text-sm font-semibold text-muted-foreground">{context}</p>
             <h1 className="text-[30px] leading-tight font-extrabold">Ready to close?</h1>
             <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
-              <Eyebrow>{path === "estimate" ? "On the estimate" : "Repairs on this visit"}</Eyebrow>
+              <Eyebrow>{closePath === "estimate" ? "On the estimate" : "Repairs on this visit"}</Eyebrow>
               {picks.length === 0 ? (
                 <p className="text-[15px] text-muted-foreground">
-                  {path === "one_off" ? "One-off. Say what you did below; an owner sets the price." : "No repair picked yet."}
+                  {closePath === "one_off" ? "One-off. Say what you did below; an owner sets the price." : "No repair picked yet."}
                 </p>
               ) : (
                 picks.map((p) => (
@@ -1071,7 +1076,66 @@ function VisitSession({
                 {picks.length} repairs on one visit ({formatDollars(total).replace(".00", "")} listed). An owner sets the final price at review, since travel is only charged once.
               </p>
             ) : null}
-            {path === "one_off" || path === "estimate" ? (
+            {partRepairs.length > 0 || pickedBundles.some((b) => b.requiresModelSerial) || asEstimate ? (
+              <section className="flex flex-col gap-3 rounded-xl border-2 border-high/60 bg-card p-4">
+                <Eyebrow>
+                  {asEstimate ? "For the estimate" : partRepairs.length > 0 ? "Needs a part" : "This repair needs"}
+                </Eyebrow>
+                {partRepairs.length > 0 && !asEstimate ? (
+                  <p className="text-[15px] font-semibold">{partText}</p>
+                ) : null}
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Model">
+                    <Input value={modelText} onChange={(event) => setModelText(event.target.value)} className="h-12 rounded-xl text-base" autoCapitalize="characters" />
+                  </Field>
+                  <Field label="Serial">
+                    <Input value={serial} onChange={(event) => setSerial(event.target.value)} className="h-12 rounded-xl text-base" autoCapitalize="characters" />
+                  </Field>
+                </div>
+                {asEstimate ? (
+                  <Field label="Equipment size">
+                    <Input value={equipmentSize} onChange={(event) => setEquipmentSize(event.target.value)} placeholder="e.g. 2.5 ton" className="h-12 rounded-xl text-base" />
+                  </Field>
+                ) : null}
+                <label className="flex h-12 cursor-pointer items-center justify-center rounded-xl border-2 border-ink bg-card text-[17px] font-bold">
+                  {readVisitPhotos(`${model.requestId}:nameplate`).length > 0 ? "Nameplate photo ✓ · retake" : "Nameplate photo"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="sr-only"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      if (file) {
+                        void shrinkPhoto(file).then((url) => {
+                          if (url) void addPhoto(model.requestId, url, "nameplate", photos, setPhotos, setFormError)
+                        })
+                      }
+                    }}
+                  />
+                </label>
+                {partRepairs.length > 0 && !asEstimate ? (
+                  <p className="text-[13px] text-muted-foreground">Closing puts the job in Parts. The part order can be finished from the Parts screen.</p>
+                ) : null}
+              </section>
+            ) : null}
+            {picks.length > 0 ? (
+              <label className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-2">
+                <span>
+                  <span className="block text-[16px] font-bold">Send as an estimate</span>
+                  <span className="block text-[13px] text-muted-foreground">
+                    {suggestEstimate ? "Suggested for this job. " : ""}The owner reviews it before it goes to the property.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={asEstimate}
+                  onChange={(event) => setEstimateChoice(event.target.checked)}
+                  className="size-6 shrink-0 accent-primary"
+                />
+              </label>
+            ) : null}
+            {closePath === "one_off" ? (
               <>
                 <Eyebrow>What you did</Eyebrow>
                 <textarea value={narrative} onChange={(event) => setNarrative(event.target.value)} className={fieldClass} aria-label="What you did" />
@@ -1079,11 +1143,17 @@ function VisitSession({
                 <Input value={materials} onChange={(event) => setMaterials(event.target.value)} className="h-12 rounded-xl text-base" aria-label="Materials" />
               </>
             ) : null}
-            <Eyebrow>Note · optional</Eyebrow>
+            <Eyebrow>
+              {closePath === "estimate"
+                ? "Why an estimate · required"
+                : closePath === "one_off"
+                  ? "Note · required"
+                  : "Note · optional"}
+            </Eyebrow>
             <textarea
               value={note}
               onChange={(event) => setNote(event.target.value)}
-              placeholder="Type, or tap the mic on your keyboard to talk"
+              placeholder={closePath === "estimate" ? "What's wrong and what it needs" : "Type, or tap the mic on your keyboard to talk"}
               className={fieldClass}
               aria-label="Note"
             />
@@ -1158,21 +1228,6 @@ function VisitSession({
         </div>
       ) : null}
 
-      {isHub && mine && !addingAnother ? (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card">
-          <div className="mx-auto w-full max-w-md px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
-            <Eyebrow>Not a simple fix?</Eyebrow>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <OutlineButton disabled={busy} onClick={() => void ensureWorking().then((ok) => ok && choosePath("parts"))}>
-                Need a part
-              </OutlineButton>
-              <OutlineButton disabled={busy} onClick={() => void ensureWorking().then((ok) => ok && choosePath("estimate"))}>
-                Estimate
-              </OutlineButton>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <Sheet open={attemptOpen} title="Couldn't get in" onClose={() => setAttemptOpen(false)}>
         <div className="flex flex-col gap-3">
@@ -1243,19 +1298,20 @@ function BigButton({
   )
 }
 
-function OutlineButton({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) {
+function QuietLink({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="h-14 rounded-xl border-2 border-ink bg-card text-[17px] font-bold disabled:opacity-50">
+    <button type="button" onClick={onClick} className="min-h-11 text-[15px] font-semibold text-primary underline">
       {children}
     </button>
   )
 }
 
-function SoftButton({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="h-14 rounded-xl border border-ink/40 bg-secondary/60 text-[17px] font-bold disabled:opacity-50">
+    <label className="flex flex-col gap-1">
+      <span className="text-[15px] font-semibold">{label}</span>
       {children}
-    </button>
+    </label>
   )
 }
 
@@ -1337,104 +1393,6 @@ function AccessBlock({ model }: { model: VisitModel }) {
         ) : null}
       </div>
     </section>
-  )
-}
-
-function GuidedFields({
-  path,
-  modelText,
-  serial,
-  equipmentSize,
-  readings,
-  onModel,
-  onSerial,
-  onSize,
-  onReadings,
-  onPhoto,
-}: {
-  path: ClosePath
-  modelText: string
-  serial: string
-  equipmentSize: string
-  readings: Readings
-  onModel: (value: string) => void
-  onSerial: (value: string) => void
-  onSize: (value: string) => void
-  onReadings: (value: Readings) => void
-  onPhoto: (url: string, kind: "photo" | "nameplate") => void
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <Label htmlFor="model">Model</Label>
-      <Input id="model" value={modelText} onChange={(event) => onModel(event.target.value)} className="min-h-12 text-base" autoComplete="off" />
-      <Label htmlFor="serial">Serial</Label>
-      <Input id="serial" value={serial} onChange={(event) => onSerial(event.target.value)} className="min-h-12 text-base" autoComplete="off" />
-      <label className="flex min-h-12 items-center justify-center rounded-lg border border-border px-3 text-sm">
-        Nameplate photo
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="sr-only"
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) {
-              void shrinkPhoto(file).then((url) => {
-                if (url) {
-                  onPhoto(url, "nameplate")
-                }
-              })
-            }
-          }}
-        />
-      </label>
-      {path === "estimate" ? (
-        <>
-          <Label htmlFor="size">Equipment size</Label>
-          <Input id="size" value={equipmentSize} onChange={(event) => onSize(event.target.value)} className="min-h-12 text-base" placeholder="2.5 ton" />
-        </>
-      ) : null}
-      <div className="grid grid-cols-2 gap-2">
-        {(
-          [
-            ["superheat", "Superheat"],
-            ["subcool", "Subcool"],
-            ["deltaT", "Delta T"],
-            ["suction", "Suction"],
-            ["liquid", "Liquid"],
-          ] as const
-        ).map(([key, label]) => (
-          <div key={key}>
-            <Label htmlFor={key}>{label}</Label>
-            <Input
-              id={key}
-              value={readings[key]}
-              onChange={(event) => onReadings({ ...readings, [key]: event.target.value })}
-              className="mt-1 min-h-12 text-base"
-            />
-          </div>
-        ))}
-      </div>
-      <label className="flex min-h-12 items-center justify-center rounded-lg border border-border px-3 text-sm">
-        Add a photo
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="sr-only"
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) {
-              void shrinkPhoto(file).then((url) => {
-                if (url) {
-                  onPhoto(url, "photo")
-                }
-              })
-            }
-          }}
-        />
-      </label>
-    </div>
   )
 }
 
@@ -1613,7 +1571,7 @@ function fieldsFrom(model: VisitModel, draft: VisitDraft | null) {
     serial: draft?.serial || model.visit?.serial || "",
     equipmentSize: draft?.equipmentSize || model.visit?.equipmentSize || "",
     note: draft?.note || model.visit?.note || "",
-    readings: draft?.readings?.superheat !== undefined ? draft.readings : model.visit?.readings ?? emptyReadings(),
+    readings: draft?.readings?.returnAir !== undefined ? draft.readings : model.visit?.readings ?? emptyReadings(),
     signoffName: draft?.signoffName || model.visit?.signoffName || "",
     signature: draft?.signatureDataUrl ?? null,
     narrative: draft?.oneOffNarrative || "",
@@ -1646,7 +1604,8 @@ function openingStep(model: VisitModel, draft: VisitDraft | null): Step {
   }
   if (status === "working") {
     // Coming back to a job with repairs on it: straight to close.
-    return draft?.step ?? (model.selections.length > 0 ? "close" : "diagnose")
+    const saved = draft?.step === "parts" ? "close" : draft?.step
+    return saved ?? (model.selections.length > 0 ? "close" : "diagnose")
   }
   if (status === "attempt") {
     return "attempt_done"

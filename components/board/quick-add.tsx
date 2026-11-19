@@ -17,7 +17,7 @@ import {
 } from "@/lib/board-rules"
 import {
   contactsForPicker,
-  propertiesForPicker,
+  defaultContactFor,
   QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT,
   QUICK_ADD_DEFAULT_SOURCE,
   type BoardCatalog,
@@ -42,12 +42,7 @@ export function QuickAddSheet({
     return null
   }
   return (
-    <QuickAddForm
-      catalog={catalog}
-      onClose={onClose}
-      onCreated={onCreated}
-      onQueued={onQueued}
-    />
+    <QuickAddForm catalog={catalog} onClose={onClose} onCreated={onCreated} onQueued={onQueued} />
   )
 }
 
@@ -62,11 +57,10 @@ function QuickAddForm({
   onCreated: (message: string, requestId: string) => void
   onQueued: (item: PendingQuickAdd) => void
 }) {
-  const [contactId, setContactId] = useState("")
+  // Property first. The contact fills in from the property; changing it is optional.
   const [propertyId, setPropertyId] = useState("")
-  const [showAllContacts, setShowAllContacts] = useState(false)
-  const [showAllProperties, setShowAllProperties] = useState(false)
-  const [contactQuery, setContactQuery] = useState("")
+  const [contactOverride, setContactOverride] = useState("")
+  const [changingContact, setChangingContact] = useState(false)
   const [propertyQuery, setPropertyQuery] = useState("")
   const [unitText, setUnitText] = useState("")
   const [unitId, setUnitId] = useState<string | null>(null)
@@ -74,7 +68,6 @@ function QuickAddForm({
   const [unitsMessage, setUnitsMessage] = useState<string | null>(null)
   const [issue, setIssue] = useState("")
   const [attempted, setAttempted] = useState(false)
-  const [linkPrompt, setLinkPrompt] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [notedAt, setNotedAt] = useState<number | null>(null)
@@ -101,21 +94,23 @@ function QuickAddForm({
     }
   }, [propertyId])
 
-  const contact = catalog.contacts.find((item) => item.id === contactId) ?? null
   const property = catalog.properties.find((item) => item.id === propertyId) ?? null
+  const contact =
+    catalog.contacts.find((item) => item.id === contactOverride) ??
+    (propertyId
+      ? defaultContactFor(propertyId, catalog.contacts, catalog.links, catalog.properties)
+      : null)
+  const contactId = contact?.id ?? ""
   const contactChoices = useMemo(
-    () =>
-      contactsForPicker(catalog.contacts, catalog.links, property, showAllContacts).filter(
-        (item) => matchesQuery(`${item.name} ${item.customerName}`, contactQuery),
-      ),
-    [catalog.contacts, catalog.links, property, showAllContacts, contactQuery],
+    () => (property ? contactsForPicker(catalog.contacts, catalog.links, property, true) : []),
+    [catalog.contacts, catalog.links, property],
   )
   const propertyChoices = useMemo(
     () =>
-      propertiesForPicker(catalog.properties, catalog.links, contact, showAllProperties).filter(
-        (item) => matchesQuery(`${item.name} ${item.customerName} ${item.address}`, propertyQuery),
-      ),
-    [catalog.properties, catalog.links, contact, showAllProperties, propertyQuery],
+      [...catalog.properties]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .filter((item) => matchesQuery(`${item.name} ${item.address}`, propertyQuery)),
+    [catalog.properties, propertyQuery],
   )
 
   const missing = attempted
@@ -134,19 +129,20 @@ function QuickAddForm({
           nowMs: notedAt,
         })
       : null
-  const unitChoices = units
-    .filter((unit) => matchesQuery(unit.label, unitText))
-    .slice(0, 6)
+  const unitChoices = units.filter((unit) => matchesQuery(unit.label, unitText)).slice(0, 6)
 
   async function save(linkContact: boolean) {
-    const gaps = quickAddMissing({ contactId, propertyId, unitId, unitText, issue })
+    setChangingContact(false)
+    const gaps = quickAddMissing({
+      contactId,
+      propertyId,
+      unitId,
+      unitText,
+      issue,
+    })
     setAttempted(true)
     setError(null)
     if (gaps.length > 0) {
-      return
-    }
-    if (needsLink && !linkContact) {
-      setLinkPrompt(true)
       return
     }
 
@@ -158,7 +154,8 @@ function QuickAddForm({
       issue: issue.trim(),
       source: QUICK_ADD_DEFAULT_SOURCE,
       reportedByResident: QUICK_ADD_DEFAULT_REPORTED_BY_RESIDENT,
-      linkContact: needsLink && linkContact,
+      // A contact picked for a property they aren't linked to gets linked.
+      linkContact: needsLink || linkContact,
       contactName: contact?.name ?? "Contact",
       propertyName: property?.name ?? "Property",
       unitLabel: selectedUnit?.label ?? unitText.trim(),
@@ -188,7 +185,7 @@ function QuickAddForm({
             issue: result.data.duplicate.issue,
             status: result.data.duplicate.status,
             createdAt: result.data.duplicate.createdAt,
-            nowMs: Date.now(),
+            nowMs: currentTimeMs(),
           })}`
         : ""
       onCreated(`Saved ${result.data.displayNumber}.${duplicateNote}`, result.data.id)
@@ -212,164 +209,177 @@ function QuickAddForm({
           void save(false)
         }}
       >
-        <Picker
-          label="Contact"
-          invalid={missing.includes("contact")}
-          query={contactQuery}
-          onQuery={setContactQuery}
-          selected={contact ? `${contact.name} · ${contact.customerName}` : null}
-          onClear={() => {
-            setContactId("")
-            setShowAllProperties(false)
-            setLinkPrompt(false)
-          }}
-          options={contactChoices.slice(0, 8).map((item) => ({
-            id: item.id,
-            title: item.name,
-            detail: item.customerName,
-          }))}
-          more={Math.max(0, contactChoices.length - 8)}
-          empty="No contacts match."
-          onPick={(id) => {
-            setContactId(id)
-            setContactQuery("")
-            setShowAllProperties(false)
-            setLinkPrompt(false)
-          }}
-        />
-        {contact && !showAllProperties ? (
-          <Button
-            type="button"
-            variant="ghost"
-            className="min-h-12 justify-start px-1"
-            onClick={() => setShowAllProperties(true)}
-          >
-            Property isn&apos;t linked — show this customer&apos;s properties
-          </Button>
-        ) : null}
-
-        <Picker
-          label="Property"
-          invalid={missing.includes("property")}
-          query={propertyQuery}
-          onQuery={setPropertyQuery}
-          selected={property ? `${property.name} · ${property.customerName}` : null}
-          onClear={() => {
-            setPropertyId("")
-            setUnitId(null)
-            setUnitText("")
-            setUnits([])
-            setShowAllContacts(false)
-            setLinkPrompt(false)
-          }}
-          options={propertyChoices.slice(0, 8).map((item) => ({
-            id: item.id,
-            title: item.name,
-            detail: item.customerName,
-          }))}
-          more={Math.max(0, propertyChoices.length - 8)}
-          empty={
-            contact && !showAllProperties
-              ? "No properties linked to this contact."
-              : "No properties match."
-          }
-          onPick={(id) => {
-            setPropertyId(id)
-            setPropertyQuery("")
-            setUnitId(null)
-            setUnitText("")
-            setUnits([])
-            setShowAllContacts(false)
-            setLinkPrompt(false)
-          }}
-        />
-        {property && !showAllContacts ? (
-          <Button
-            type="button"
-            variant="ghost"
-            className="min-h-12 justify-start px-1"
-            onClick={() => setShowAllContacts(true)}
-          >
-            Contact isn&apos;t linked — show this customer&apos;s contacts
-          </Button>
-        ) : null}
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="quick-add-unit">Unit</Label>
-          <Input
-            id="quick-add-unit"
-            value={unitText}
-            aria-invalid={missing.includes("unit")}
-            placeholder="Recent units first, or type a new one"
-            className="h-12 min-h-12 text-base"
-            onChange={(event) => {
-              const value = event.target.value
-              setUnitText(value)
-              const match = units.find(
-                (unit) => unit.label.toLowerCase() === value.trim().toLowerCase(),
-              )
-              setUnitId(match?.id ?? null)
-              setNotedAt(Date.now())
-            }}
-          />
-          {unitsMessage ? (
-            <p className="text-sm text-destructive">{unitsMessage}</p>
-          ) : null}
-          {unitChoices.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {unitChoices.map((unit) => (
-                <Button
-                  key={unit.id}
-                  type="button"
-                  variant={unit.id === unitId ? "default" : "outline"}
-                  size="field"
-                  className="justify-start"
-                  onClick={() => {
-                    setUnitId(unit.id)
-                    setUnitText(unit.label)
-                    setNotedAt(Date.now())
-                  }}
-                >
-                  {unit.label}
-                  {unit.recent ? " · recent" : ""}
-                </Button>
-              ))}
+        {property ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[13px] font-bold tracking-[0.08em] text-muted-foreground uppercase">
+                Property
+              </p>
+              <p className="truncate text-lg font-bold">{property.name}</p>
             </div>
-          ) : null}
-          {warning ? (
-            <p role="status" className="rounded-lg border border-free-foreground/30 bg-free px-3 py-3 text-sm leading-6 text-free-foreground">
-              {warning}. The call will still be saved.
-            </p>
-          ) : null}
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="quick-add-issue">Issue</Label>
-          <Input
-            id="quick-add-issue"
-            value={issue}
-            aria-invalid={missing.includes("issue")}
-            maxLength={200}
-            placeholder="One line, such as no heat"
-            className="h-12 min-h-12 text-base"
-            onChange={(event) => setIssue(event.target.value)}
-          />
-        </div>
-
-        {linkPrompt ? (
-          <div className="rounded-lg border border-border bg-card px-3 py-3">
-            <p className="text-sm leading-6">
-              Link {contact?.name ?? "this contact"} to {property?.name ?? "this property"}?
-            </p>
-            <div className="mt-3 flex gap-2">
-              <Button type="button" size="field" disabled={saving} onClick={() => void save(true)}>
-                Link and save
-              </Button>
-              <Button type="button" size="field" variant="outline" onClick={() => setLinkPrompt(false)}>
-                Not now
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="field"
+              onClick={() => {
+                setPropertyId("")
+                setContactOverride("")
+                setChangingContact(false)
+                setUnitId(null)
+                setUnitText("")
+                setUnits([])
+              }}
+            >
+              Change
+            </Button>
           </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="quick-add-property">Property</Label>
+            <Input
+              id="quick-add-property"
+              value={propertyQuery}
+              aria-invalid={missing.includes("property")}
+              placeholder="Type to narrow the list"
+              className="h-12 text-base"
+              onChange={(event) => setPropertyQuery(event.target.value)}
+            />
+            <ul className="max-h-[50dvh] divide-y divide-border overflow-y-auto rounded-xl border border-border bg-card">
+              {propertyChoices.length === 0 ? (
+                <li className="px-4 py-3 text-sm text-muted-foreground">No properties match.</li>
+              ) : (
+                propertyChoices.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPropertyId(item.id)
+                        setPropertyQuery("")
+                        setContactOverride("")
+                        setUnitId(null)
+                        setUnitText("")
+                        setUnits([])
+                      }}
+                      className="flex min-h-12 w-full flex-col items-start px-4 py-2 text-left hover:bg-muted"
+                    >
+                      <span className="text-[16px] font-semibold">{item.name}</span>
+                      <span className="text-[13px] text-muted-foreground">{item.address}</span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        )}
+
+        {property ? (
+          changingContact ? (
+            <div className="flex flex-col gap-2">
+              <Label>Contact</Label>
+              <ul className="max-h-60 divide-y divide-border overflow-y-auto rounded-xl border border-border bg-card">
+                {contactChoices.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContactOverride(item.id)
+                        setChangingContact(false)
+                      }}
+                      className="flex min-h-12 w-full items-center px-4 py-2 text-left text-[16px] hover:bg-muted"
+                    >
+                      {item.name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-[15px] text-muted-foreground">
+              {contact ? (
+                <>
+                  Contact: <span className="font-semibold text-foreground">{contact.name}</span>{" "}
+                  {contactChoices.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => setChangingContact(true)}
+                      className="underline"
+                    >
+                      change
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                "No contact on file for this property. Add one in Setup → Contacts."
+              )}
+            </p>
+          )
+        ) : null}
+
+        {property ? (
+          <>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="quick-add-unit">Unit</Label>
+              <Input
+                id="quick-add-unit"
+                value={unitText}
+                aria-invalid={missing.includes("unit")}
+                placeholder="Recent units first, or type a new one"
+                className="h-12 min-h-12 text-base"
+                onChange={(event) => {
+                  const value = event.target.value
+                  setUnitText(value)
+                  const match = units.find(
+                    (unit) => unit.label.toLowerCase() === value.trim().toLowerCase(),
+                  )
+                  setUnitId(match?.id ?? null)
+                  setNotedAt(currentTimeMs())
+                }}
+              />
+              {unitsMessage ? <p className="text-sm text-destructive">{unitsMessage}</p> : null}
+              {unitChoices.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {unitChoices.map((unit) => (
+                    <Button
+                      key={unit.id}
+                      type="button"
+                      variant={unit.id === unitId ? "default" : "outline"}
+                      size="field"
+                      className="justify-start"
+                      onClick={() => {
+                        setUnitId(unit.id)
+                        setUnitText(unit.label)
+                        setNotedAt(currentTimeMs())
+                      }}
+                    >
+                      {unit.label}
+                      {unit.recent ? " · recent" : ""}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
+              {warning ? (
+                <p
+                  role="status"
+                  className="rounded-lg border border-free-foreground/30 bg-free px-3 py-3 text-sm leading-6 text-free-foreground"
+                >
+                  {warning}. The call will still be saved.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="quick-add-issue">Issue</Label>
+              <Input
+                id="quick-add-issue"
+                value={issue}
+                aria-invalid={missing.includes("issue")}
+                maxLength={200}
+                placeholder="One line, such as no heat"
+                className="h-12 min-h-12 text-base"
+                onChange={(event) => setIssue(event.target.value)}
+              />
+            </div>
+          </>
         ) : null}
 
         {error ? (
@@ -383,9 +393,11 @@ function QuickAddForm({
           </p>
         ) : null}
 
-        <Button type="submit" size="field" disabled={saving}>
-          {saving ? "Saving…" : "Save call"}
-        </Button>
+        {property ? (
+          <Button type="submit" size="field" disabled={saving || !contact} className="h-14 text-lg">
+            {saving ? "Saving…" : "Save call"}
+          </Button>
+        ) : null}
       </form>
     </Sheet>
   )
@@ -404,78 +416,7 @@ function fieldLabel(field: QuickAddField): string {
   return "issue"
 }
 
-function Picker({
-  label,
-  invalid,
-  query,
-  onQuery,
-  selected,
-  onClear,
-  options,
-  more,
-  empty,
-  onPick,
-}: {
-  label: string
-  invalid: boolean
-  query: string
-  onQuery: (value: string) => void
-  selected: string | null
-  onClear: () => void
-  options: { id: string; title: string; detail: string }[]
-  more: number
-  empty: string
-  onPick: (id: string) => void
-}) {
-  const inputId = `quick-add-${label.toLowerCase()}`
-  return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor={inputId}>{label}</Label>
-      {selected ? (
-        <div className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-          <p className="text-sm font-medium">{selected}</p>
-          <Button type="button" variant="outline" size="field" onClick={onClear}>
-            Change
-          </Button>
-        </div>
-      ) : (
-        <>
-          <Input
-            id={inputId}
-            value={query}
-            aria-invalid={invalid}
-            placeholder={`Search ${label.toLowerCase()}`}
-            className="h-12 min-h-12 text-base"
-            onChange={(event) => onQuery(event.target.value)}
-          />
-          {options.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{empty}</p>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {options.map((option) => (
-                <Button
-                  key={option.id}
-                  type="button"
-                  variant="outline"
-                  size="field"
-                  className="h-auto min-h-12 justify-start py-2 text-left"
-                  onClick={() => onPick(option.id)}
-                >
-                  <span className="flex flex-col items-start">
-                    <span>{option.title}</span>
-                    {option.detail ? (
-                      <span className="text-xs font-normal text-muted-foreground">{option.detail}</span>
-                    ) : null}
-                  </span>
-                </Button>
-              ))}
-              {more > 0 ? (
-                <p className="text-xs text-muted-foreground">Keep typing. {more} more.</p>
-              ) : null}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  )
+/** Read the clock in event handlers only (kept out of render). */
+function currentTimeMs(): number {
+  return Date.now()
 }

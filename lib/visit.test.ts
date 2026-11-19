@@ -40,6 +40,12 @@ test("easy close needs a repair; the note is optional", () => {
   assert.deepEqual(closeGaps(base), [])
 })
 
+test("a part close needs model and serial but no note", () => {
+  const gaps = closeGaps({ ...base, path: "parts", note: "", oneShot: true, model: "", serial: "", partDescription: "Coil" })
+  assert.ok(!gaps.includes("Write a note."))
+  assert.ok(gaps.some((g) => g.startsWith("Type the model")))
+})
+
 test("one-off and estimate still need a note", () => {
   assert.ok(closeGaps({ ...base, path: "one_off", note: "" }).includes("Write a note."))
   assert.ok(closeGaps({ ...base, path: "estimate", note: "" }).includes("Write a note."))

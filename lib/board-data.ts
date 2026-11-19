@@ -397,7 +397,7 @@ async function loadCatalog(
       .select("id, name, customer_id, address_line1, city, state, zip, active, customers ( name )")
       .eq("active", true)
       .order("name"),
-    supabase.from("contact_properties").select("contact_id, property_id"),
+    supabase.from("contact_properties").select("contact_id, property_id, is_primary"),
     supabase.from("profiles").select("id, full_name, role, active, tech_positions ( lat, lng, recorded_at )").eq("active", true).order("full_name"),
     supabase.from("app_config").select("repeat_unit_window_days").eq("id", 1).maybeSingle(),
     supabase.from("property_contract").select("property_id, resident_report_mode, resident_report_notes"),
@@ -471,9 +471,11 @@ async function loadCatalog(
   const pickerLinks: PickerLink[] = ((links.data ?? []) as {
     contact_id: string
     property_id: string
+    is_primary: boolean
   }[]).map((row) => ({
     contactId: row.contact_id,
     propertyId: row.property_id,
+    isPrimary: row.is_primary,
   }))
 
   type PositionEmbed = { lat: number | string; lng: number | string; recorded_at: string }
