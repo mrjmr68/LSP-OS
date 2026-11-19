@@ -16,6 +16,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261103130000_app_feedback.sql` | Board notes (`app_feedback`). Crew inserts their own. Owners read all. Email stamp is separate. |
 | `20261104020000_owner_on_the_way.sql` | On the way works for an owner assigned to the call. The status switch still needs a reason for that jump. |
 | `20261104120000_active_visit.sql` | Arrival, job start, guided close, parts, and attempt. Easy and one-off close draft an invoice and move the call to Complete. |
+| `20261119120000_v1_foundation.sql` | NC county sales tax table (100 counties, NCDOR rates effective 2026-07-01) and a county on each property that sets its tax rate; latest tech position for the Board crew strip; a tech's own My Jobs order. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
@@ -65,6 +66,14 @@ Phone starts as `unset` when the auth user has no phone in metadata. Fill the re
 - With the triggers on, a tech can edit the call text and cannot move the call to `invoiced`.
 - An owner can set High and can approve the invoice.
 - The fixture rolls back, so the draft invoice and normal priority remain.
+
+`supabase/tests/v1_foundation_proof.sql`
+
+- 100 NC counties load; Guilford is 675 bps, Mecklenburg 825.
+- Setting a property's county sets its tax rate; a county rate change reaches its properties; an invoice's tax snapshot does not change.
+- A tech can read county rates but cannot change one; an owner can.
+- A tech writes only their own position and sees only their own; owners see all.
+- A tech can order their own My Jobs and cannot order a job assigned to someone else.
 
 ## Rules encoded for later milestones
 
