@@ -3,6 +3,9 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { isSupabaseConfigured } from "@/lib/env"
 
+// Signed-out pages: SMS opt-in and the policies carriers check.
+const PUBLIC_PAGES = new Set(["/text-updates", "/privacy", "/terms"])
+
 export async function proxy(request: NextRequest) {
   if (!isSupabaseConfigured()) {
     return NextResponse.next()
@@ -37,7 +40,10 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const path = request.nextUrl.pathname
-  const isPublic = path.startsWith("/login") || path.startsWith("/auth/")
+  const isPublic =
+    path.startsWith("/login") ||
+    path.startsWith("/auth/") ||
+    PUBLIC_PAGES.has(path)
 
   if (!user && !isPublic) {
     return redirectWithCookies(request, supabaseResponse, "/login")
