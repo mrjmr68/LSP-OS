@@ -129,3 +129,234 @@ export function matchesProperty(
     s.toLowerCase().includes(q),
   )
 }
+
+// ---------------------------------------------------------------------------
+// Suppliers, contacts, customers, team
+// ---------------------------------------------------------------------------
+
+type Check<T> = { ok: true; value: T } | { ok: false; message: string }
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function optional(raw: string): string | null {
+  const t = raw.trim()
+  return t === "" ? null : t
+}
+
+function checkEmail(raw: string): Check<string | null> {
+  const email = optional(raw)
+  if (email && !emailPattern.test(email)) return { ok: false, message: "That email doesn't look right." }
+  return { ok: true, value: email ? email.toLowerCase() : null }
+}
+
+function checkPhone(raw: string): Check<string | null> {
+  const phone = optional(raw)
+  if (phone && phone.replace(/\D/g, "").length < 10) {
+    return { ok: false, message: "Phone needs 10 digits." }
+  }
+  return { ok: true, value: phone }
+}
+
+export type SupplierInput = { name: string; branch: string; phone: string; email: string; notes: string }
+
+export function validateSupplier(input: SupplierInput): Check<{
+  name: string
+  branch: string | null
+  phone: string | null
+  email: string | null
+  notes: string | null
+}> {
+  const name = input.name.trim()
+  if (!name) return { ok: false, message: "Supplier name is required." }
+  const phone = checkPhone(input.phone)
+  if (!phone.ok) return phone
+  const email = checkEmail(input.email)
+  if (!email.ok) return email
+  return {
+    ok: true,
+    value: {
+      name,
+      branch: optional(input.branch),
+      phone: phone.value,
+      email: email.value,
+      notes: optional(input.notes),
+    },
+  }
+}
+
+export type ContactInput = {
+  customerId: string
+  name: string
+  title: string
+  phone: string
+  email: string
+  smsOk: boolean
+  propertyIds: string[]
+}
+
+export function validateContact(input: ContactInput): Check<{
+  row: {
+    customer_id: string
+    name: string
+    title: string | null
+    phone: string | null
+    email: string | null
+    sms_ok: boolean
+  }
+  propertyIds: string[]
+}> {
+  if (!isUuid(input.customerId)) return { ok: false, message: "Pick the customer." }
+  const name = input.name.trim()
+  if (!name) return { ok: false, message: "Name is required." }
+  const phone = checkPhone(input.phone)
+  if (!phone.ok) return phone
+  const email = checkEmail(input.email)
+  if (!email.ok) return email
+  if (input.propertyIds.some((id) => !isUuid(id))) {
+    return { ok: false, message: "Pick the properties again." }
+  }
+  return {
+    ok: true,
+    value: {
+      row: {
+        customer_id: input.customerId,
+        name,
+        title: optional(input.title),
+        phone: phone.value,
+        email: email.value,
+        sms_ok: input.smsOk,
+      },
+      propertyIds: [...new Set(input.propertyIds)],
+    },
+  }
+}
+
+export const ADDON_MODES = [
+  { id: "do_under_limit", label: "Go ahead under a dollar limit" },
+  { id: "call_first", label: "Call the property first" },
+  { id: "estimate_required", label: "Send an estimate first" },
+] as const
+export const SIGNOFF_MODES = [
+  { id: "none", label: "No sign-off" },
+  { id: "note_only", label: "Note only" },
+  { id: "walkthrough_signature", label: "Walkthrough and signature" },
+  { id: "photos", label: "Photos" },
+] as const
+export const RESIDENT_MODES = [
+  { id: "confirm_with_property", label: "Confirm with the property first" },
+  { id: "just_go", label: "Just go" },
+  { id: "must_use_maintenance", label: "Must go through maintenance" },
+] as const
+
+type AddonMode = (typeof ADDON_MODES)[number]["id"]
+type SignoffMode = (typeof SIGNOFF_MODES)[number]["id"]
+type ResidentMode = (typeof RESIDENT_MODES)[number]["id"]
+
+export type CustomerInput = {
+  name: string
+  billingContactId: string
+  billingEmailOverride: string
+  paymentTermsDays: string
+  siteAccessText: string
+  addonApprovalMode: string
+  addonApprovalLimit: string
+  addonApprovalNotes: string
+  signoffRequirement: string
+  signoffNotes: string
+  residentReportMode: string
+  residentReportNotes: string
+  requiresEstimateOver: string
+}
+
+/** "$250" or "250.50" → cents. Empty → null. */
+export function parseDollars(raw: string): Check<number | null> {
+  const t = raw.replace(/[$,\s]/g, "")
+  if (t === "") return { ok: true, value: null }
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return { ok: false, message: "Dollar amounts look like 250 or 250.00." }
+  return { ok: true, value: Math.round(Number(t) * 100) }
+}
+
+export function centsToDollars(cents: number | null): string {
+  return cents === null ? "" : (cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)
+}
+
+export function validateCustomer(input: CustomerInput): Check<{
+  name: string
+  billing_contact_id: string
+  billing_email_override: string | null
+  payment_terms_days: number
+  site_access_text: string | null
+  addon_approval_mode: AddonMode
+  addon_approval_limit_cents: number | null
+  addon_approval_notes: string | null
+  signoff_requirement: SignoffMode
+  signoff_notes: string | null
+  resident_report_mode: ResidentMode
+  resident_report_notes: string | null
+  requires_estimate_over_cents: number | null
+}> {
+  const name = input.name.trim()
+  if (!name) return { ok: false, message: "Customer name is required." }
+  if (!isUuid(input.billingContactId)) return { ok: false, message: "Pick the billing contact." }
+  const email = checkEmail(input.billingEmailOverride)
+  if (!email.ok) return email
+  const terms = Number(input.paymentTermsDays.trim())
+  if (!Number.isInteger(terms) || terms < 0 || terms > 120) {
+    return { ok: false, message: "Payment terms are 0 to 120 days." }
+  }
+  const addon = ADDON_MODES.find((m) => m.id === input.addonApprovalMode)
+  const signoff = SIGNOFF_MODES.find((m) => m.id === input.signoffRequirement)
+  const resident = RESIDENT_MODES.find((m) => m.id === input.residentReportMode)
+  if (!addon || !signoff || !resident) return { ok: false, message: "Pick each rule again." }
+  const limit = parseDollars(input.addonApprovalLimit)
+  if (!limit.ok) return limit
+  if (addon.id === "do_under_limit" && limit.value === null) {
+    return { ok: false, message: "Enter the dollar limit for add-ons." }
+  }
+  const estimateOver = parseDollars(input.requiresEstimateOver)
+  if (!estimateOver.ok) return estimateOver
+  return {
+    ok: true,
+    value: {
+      name,
+      billing_contact_id: input.billingContactId,
+      billing_email_override: email.value,
+      payment_terms_days: terms,
+      site_access_text: optional(input.siteAccessText),
+      addon_approval_mode: addon.id,
+      addon_approval_limit_cents: addon.id === "do_under_limit" ? limit.value : null,
+      addon_approval_notes: optional(input.addonApprovalNotes),
+      signoff_requirement: signoff.id,
+      signoff_notes: optional(input.signoffNotes),
+      resident_report_mode: resident.id,
+      resident_report_notes: optional(input.residentReportNotes),
+      requires_estimate_over_cents: estimateOver.value,
+    },
+  }
+}
+
+export type TeamInput = { fullName: string; phone: string; truckLabel: string; role: string; active: boolean }
+
+export function validateTeamMember(input: TeamInput): Check<{
+  full_name: string
+  phone: string
+  truck_label: string | null
+  role: "owner" | "tech"
+  active: boolean
+}> {
+  const fullName = input.fullName.trim()
+  if (!fullName) return { ok: false, message: "Name is required." }
+  const phone = checkPhone(input.phone)
+  if (!phone.ok) return phone
+  if (input.role !== "owner" && input.role !== "tech") return { ok: false, message: "Pick Owner or Tech." }
+  return {
+    ok: true,
+    value: {
+      full_name: fullName,
+      phone: phone.value ?? "unset",
+      truck_label: optional(input.truckLabel),
+      role: input.role,
+      active: input.active,
+    },
+  }
+}

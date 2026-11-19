@@ -64,3 +64,70 @@ test("list filters", () => {
   assert.equal(matchesProperty(p, "retired", ""), false)
   assert.equal(matchesProperty({ ...p, lat: 34.6 }, "needs-pin", ""), false)
 })
+
+import {
+  centsToDollars,
+  parseDollars,
+  validateContact,
+  validateCustomer,
+  validateSupplier,
+  validateTeamMember,
+  type CustomerInput,
+} from "./setup"
+
+const uuid = "11111111-1111-4111-8111-111111111111"
+
+test("supplier needs a name; phone and email are checked", () => {
+  assert.ok(validateSupplier({ name: "Ferguson", branch: "", phone: "336-555-0100", email: "", notes: "" }).ok)
+  assert.equal(validateSupplier({ name: " ", branch: "", phone: "", email: "", notes: "" }).ok, false)
+  assert.equal(validateSupplier({ name: "X", branch: "", phone: "555-0100", email: "", notes: "" }).ok, false)
+  assert.equal(validateSupplier({ name: "X", branch: "", phone: "", email: "nope", notes: "" }).ok, false)
+})
+
+test("contact dedupes property links and lowercases email", () => {
+  const r = validateContact({ customerId: uuid, name: "Pat", title: "", phone: "", email: "Pat@Example.com", smsOk: true, propertyIds: [uuid, uuid] })
+  assert.ok(r.ok)
+  if (r.ok) {
+    assert.deepEqual(r.value.propertyIds, [uuid])
+    assert.equal(r.value.row.email, "pat@example.com")
+  }
+})
+
+test("dollars parse to cents and back", () => {
+  assert.deepEqual(parseDollars("$1,250"), { ok: true, value: 125000 })
+  assert.deepEqual(parseDollars(""), { ok: true, value: null })
+  assert.equal(parseDollars("12.345").ok, false)
+  assert.equal(centsToDollars(25000), "250")
+  assert.equal(centsToDollars(25050), "250.50")
+})
+
+const customer: CustomerInput = {
+  name: "Wynnefield Properties",
+  billingContactId: uuid,
+  billingEmailOverride: "",
+  paymentTermsDays: "30",
+  siteAccessText: "",
+  addonApprovalMode: "call_first",
+  addonApprovalLimit: "",
+  addonApprovalNotes: "",
+  signoffRequirement: "none",
+  signoffNotes: "",
+  residentReportMode: "confirm_with_property",
+  residentReportNotes: "",
+  requiresEstimateOver: "",
+}
+
+test("customer rules", () => {
+  assert.ok(validateCustomer(customer).ok)
+  assert.equal(validateCustomer({ ...customer, addonApprovalMode: "do_under_limit" }).ok, false)
+  const r = validateCustomer({ ...customer, addonApprovalMode: "do_under_limit", addonApprovalLimit: "250" })
+  assert.ok(r.ok && r.value.addon_approval_limit_cents === 25000)
+  const r2 = validateCustomer({ ...customer, addonApprovalLimit: "250" })
+  assert.ok(r2.ok && r2.value.addon_approval_limit_cents === null)
+  assert.equal(validateCustomer({ ...customer, paymentTermsDays: "500" }).ok, false)
+})
+
+test("team member", () => {
+  assert.ok(validateTeamMember({ fullName: "Mike", phone: "", truckLabel: "", role: "tech", active: true }).ok)
+  assert.equal(validateTeamMember({ fullName: "Mike", phone: "", truckLabel: "", role: "boss", active: true }).ok, false)
+})

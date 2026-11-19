@@ -6,6 +6,10 @@ import { Suspense } from "react"
 
 const SECTIONS = [
   { href: "/setup/properties", label: "Properties" },
+  { href: "/setup/contacts", label: "Contacts" },
+  { href: "/setup/customers", label: "Customers" },
+  { href: "/setup/suppliers", label: "Suppliers" },
+  { href: "/setup/team", label: "Team" },
   { href: "/setup/tax-rates", label: "Tax rates" },
 ] as const
 
