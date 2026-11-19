@@ -126,7 +126,8 @@ export function closeGaps(input: CloseChecklistInput): string[] {
   if (!input.path) {
     gaps.push("Pick a path.")
   }
-  if (input.note.trim() === "") {
+  // Optional on a simple repair; required for parts, estimate and one-off.
+  if (input.note.trim() === "" && input.path !== "easy") {
     gaps.push("Write a note.")
   }
   if (input.path === "easy" || input.path === "parts") {
@@ -220,6 +221,8 @@ export type VisitCommand =
     }
   | { id: string; requestId: string; seenAt: string | null; kind: "start_job" }
   | { id: string; requestId: string; seenAt: string | null; kind: "select_bundle"; bundleId: string }
+  | { id: string; requestId: string; seenAt: string | null; kind: "add_bundle"; bundleId: string }
+  | { id: string; requestId: string; seenAt: string | null; kind: "remove_bundle"; selectionId: string }
   | {
       id: string
       requestId: string

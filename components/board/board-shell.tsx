@@ -6,7 +6,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
   assignRequest,
   createQuickAdd,
-  goEnRoute,
   reorderMyJobs,
   setBoardStatus,
   setRequestPriority,
@@ -48,7 +47,6 @@ import { crewStates, groupByDisplayStage, myJobs } from "@/lib/board-v1"
 import {
   mapsDirectionsUrl,
   ownerStatusNeedsReason,
-  runGoEnRoute,
 } from "@/lib/board-rules"
 import type { FeedbackContextInput } from "@/lib/feedback"
 import {
@@ -66,9 +64,8 @@ import {
 } from "@/lib/visit"
 
 type View = "board" | "mine"
-type EnRoutePhase = "location" | "save"
 type Panel =
-  | { kind: "enroute" | "detail" | "repeat" | "status" | "assign" | "delete"; card: BoardCard }
+  | { kind: "detail" | "repeat" | "status" | "assign" | "delete"; card: BoardCard }
   | null
 
 export function BoardShell({
@@ -78,6 +75,7 @@ export function BoardShell({
   catalogError,
   profileMissing,
   loadError,
+  initialView,
 }: {
   viewer: BoardViewer
   cards: BoardCard[]
@@ -85,11 +83,12 @@ export function BoardShell({
   catalogError: string | null
   profileMissing: boolean
   loadError: string | null
+  initialView?: View
 }) {
   const router = useRouter()
   const owner = viewer.role === "owner"
-  // Techs land on My Jobs; owners on the Board.
-  const [view, setView] = useState<View>(owner ? "board" : "mine")
+  // Techs land on My Jobs; owners on the Board. Field screens send people back to My Jobs.
+  const [view, setView] = useState<View>(initialView ?? (owner ? "board" : "mine"))
   const queue = useSyncExternalStore(
     subscribeQuickAddQueue,
     readQuickAddQueue,
@@ -117,7 +116,6 @@ export function BoardShell({
   const [panelError, setPanelError] = useState<string | null>(null)
   const [detailNote, setDetailNote] = useState<string | null>(null)
   const [directionsUrl, setDirectionsUrl] = useState<string | null>(null)
-  const [enRoutePhase, setEnRoutePhase] = useState<EnRoutePhase | null>(null)
   const [busy, setBusy] = useState(false)
   const [reordering, setReordering] = useState(false)
   // A reorder shows at once; it's dropped as soon as fresh cards arrive from the server.
@@ -221,7 +219,7 @@ export function BoardShell({
     return () => window.clearTimeout(followUp)
   }, [revealNonce, cards, queue])
 
-  function openCard(card: BoardCard, fromMyJobs = false) {
+  function openCard(card: BoardCard) {
     if (card.pendingSync) {
       return
     }
@@ -235,14 +233,14 @@ export function BoardShell({
       router.push(`/board/visit/${card.id}`)
       return
     }
-    const mineStart =
-      (fromMyJobs || view === "mine") &&
-      isMine &&
-      (card.status === "assigned" || card.status === "ready")
+    if (isMine && (card.status === "assigned" || card.status === "ready")) {
+      router.push(`/board/visit/${card.id}`)
+      return
+    }
     setPanelError(null)
     setDetailNote(null)
     setDirectionsUrl(null)
-    setPanel({ kind: mineStart ? "enroute" : "detail", card })
+    setPanel({ kind: "detail", card })
   }
 
   function openAssign(card: BoardCard) {
@@ -292,50 +290,6 @@ export function BoardShell({
       setPanel(null)
       router.refresh()
     })
-  }
-
-  async function confirmEnRoute(card: BoardCard) {
-    setBusy(true)
-    setEnRoutePhase("location")
-    setPanelError(null)
-    setDetailNote(null)
-    setDirectionsUrl(null)
-    setNotice(null)
-    try {
-      const outcome = await runGoEnRoute({
-        fallbackAddress: card.address,
-        locate: currentPosition,
-        save: async (origin) => {
-          setEnRoutePhase("save")
-          const result = await goEnRoute({ requestId: card.id, origin })
-          if (!result.ok) {
-            return { ok: false, message: result.message }
-          }
-          return {
-            ok: true,
-            address: result.data.address,
-            notice: result.data.notice,
-          }
-        },
-        openMaps: openMapsTab,
-      })
-      if (!outcome.ok) {
-        setPanelError(outcome.message)
-        setNotice(outcome.message)
-        return
-      }
-      setNotice(outcome.notice)
-      setPanel(null)
-      router.push(`/board/visit/${card.id}`)
-      router.refresh()
-    } catch {
-      const message = "Could not start the drive. Check the signal and try again."
-      setPanelError(message)
-      setNotice(message)
-    } finally {
-      setBusy(false)
-      setEnRoutePhase(null)
-    }
   }
 
   const notices = (
@@ -444,7 +398,7 @@ export function BoardShell({
               jobs={mine}
               nowMs={nowMs}
               saving={reordering}
-              onOpenJob={(card) => openCard(card, true)}
+              onOpenJob={(card) => openCard(card)}
               onReorder={saveOrder}
             />
           </div>
@@ -489,11 +443,7 @@ export function BoardShell({
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-30 flex gap-2 border-t border-border bg-card px-3 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
       >
-        {owner ? (
-          <BottomTab active={view === "board"} onClick={() => setView("board")}>
-            Board
-          </BottomTab>
-        ) : (
+        {owner ? null : (
           <BottomTab onClick={() => setView(view === "mine" ? "board" : "mine")}>
             {view === "mine" ? "Board" : "My jobs"}
           </BottomTab>
@@ -532,14 +482,6 @@ export function BoardShell({
         }}
       />
 
-      <EnRouteSheet
-        card={visiblePanel?.kind === "enroute" ? visiblePanel.card : null}
-        busy={busy}
-        phase={enRoutePhase}
-        error={panelError}
-        onClose={() => setPanel(null)}
-        onConfirm={(card) => void confirmEnRoute(card)}
-      />
       <DetailSheet
         card={visiblePanel?.kind === "detail" ? visiblePanel.card : null}
         viewer={viewer}
@@ -552,12 +494,7 @@ export function BoardShell({
           setDetailNote(null)
           setDirectionsUrl(null)
         }}
-        onEnRoute={(card) => {
-          setPanelError(null)
-          setDetailNote(null)
-          setDirectionsUrl(null)
-          setPanel({ kind: "enroute", card })
-        }}
+        onEnRoute={(card) => router.push(`/board/visit/${card.id}`)}
         onStatus={(card) => setPanel({ kind: "status", card })}
         onAssign={(card) => setPanel({ kind: "assign", card })}
         onDelete={(card) => setPanel({ kind: "delete", card })}
@@ -765,92 +702,7 @@ function pendingCard(item: PendingQuickAdd): BoardCard {
   }
 }
 
-function currentPosition(): Promise<{ lat: number; lng: number } | null> {
-  if (typeof navigator === "undefined" || !navigator.geolocation) {
-    return Promise.resolve(null)
-  }
-  return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      (position) =>
-        resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
-    )
-  })
-}
 
-function openMapsTab(url: string): boolean {
-  if (!url.startsWith("https://www.google.com/maps/")) {
-    return false
-  }
-  try {
-    const popup = window.open(url, "_blank")
-    if (!popup || popup.closed) {
-      return false
-    }
-    try {
-      popup.opener = null
-    } catch {
-      // Maps is another site. The tab is already open.
-    }
-    return true
-  } catch {
-    return false
-  }
-}
-
-function EnRouteSheet({
-  card,
-  busy,
-  phase,
-  error,
-  onClose,
-  onConfirm,
-}: {
-  card: BoardCard | null
-  busy: boolean
-  phase: EnRoutePhase | null
-  error: string | null
-  onClose: () => void
-  onConfirm: (card: BoardCard) => void
-}) {
-  let label = "On the way"
-  if (busy) {
-    label = phase === "location" ? "Getting location…" : "Starting…"
-  }
-  return (
-    <Sheet open={card !== null} title="On the way?" onClose={onClose}>
-      {card ? (
-        <div className="flex flex-col gap-4">
-          <p className="text-sm leading-6">
-            {card.propertyName} · {card.unitLabel}. {card.issue}. You&apos;re heading
-            there. The call moves to In Progress, the contact gets a text when texts
-            are on, and Maps opens. With location off, the text has no drive time.
-          </p>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
-          {busy && phase === "location" ? (
-            <p aria-live="polite" className="text-sm leading-6 text-muted-foreground">
-              Stay on this page if Safari asks for location.
-            </p>
-          ) : null}
-          <Button
-            type="button"
-            size="field"
-            disabled={busy}
-            aria-busy={busy}
-            onClick={() => onConfirm(card)}
-          >
-            {label}
-          </Button>
-        </div>
-      ) : null}
-    </Sheet>
-  )
-}
 
 function DetailSheet({
   card,
@@ -1166,11 +1018,6 @@ function AccountMenu({
         {viewer.mode === "authenticated" ? (
           <>
             <DropdownMenuSeparator />
-            {viewer.role === "owner" ? (
-              <DropdownMenuItem render={<a href="/setup" />} className="min-h-12">
-                Setup
-              </DropdownMenuItem>
-            ) : null}
             {viewer.profileId ? (
               <DropdownMenuItem className="min-h-12" onClick={onReport}>
                 Report / suggest

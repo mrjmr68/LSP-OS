@@ -93,9 +93,26 @@ export type VisitModel = {
     title: string
     priceCents: number
   } | null
+  /** Every repair picked on this visit, oldest first. */
+  selections: VisitSelection[]
   parts: VisitPart[]
   photoCount: number
   history: string[]
+  /** "This unit before": repairs on earlier calls, newest first. */
+  unitHistory: { title: string; whenLabel: string }[]
+  /** Other calls on this unit inside the repeat window (14 days by default). */
+  repeat: { count: number; windowDays: number } | null
+  /** The viewer's next job after this one, for "Next: …" on close. */
+  nextJob: { id: string; title: string } | null
+}
+
+export type VisitSelection = {
+  id: string
+  bundleId: string | null
+  code: string
+  title: string
+  priceCents: number
+  oneShot: boolean
 }
 
 export type VisitLoad =
@@ -203,16 +220,15 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
     ) ?? visits[0] ?? null
 
   let selection: VisitModel["selection"] = null
+  let selections: VisitSelection[] = []
   let photoCount = 0
   if (active) {
     const [selectionResult, photoResult] = await Promise.all([
       supabase
         .from("visit_bundle_selections")
-        .select("bundle_id, code_snap, title_snap, price_cents_snap")
+        .select("id, bundle_id, code_snap, title_snap, price_cents_snap, bundles ( one_shot )")
         .eq("visit_id", active.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
+        .order("created_at", { ascending: true }),
       supabase
         .from("attachments")
         .select("id", { count: "exact", head: true })
@@ -220,9 +236,24 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         .eq("owner_id", active.id)
         .eq("kind", "photo"),
     ])
-    const picked = selectionResult.data as
-      | { bundle_id: string | null; code_snap: string; title_snap: string; price_cents_snap: number }
-      | null
+    type SelectionRow = {
+      id: string
+      bundle_id: string | null
+      code_snap: string
+      title_snap: string
+      price_cents_snap: number
+      bundles: { one_shot: boolean } | { one_shot: boolean }[] | null
+    }
+    const rows = (selectionResult.data ?? []) as SelectionRow[]
+    selections = rows.map((r) => ({
+      id: r.id,
+      bundleId: r.bundle_id,
+      code: r.code_snap,
+      title: r.title_snap,
+      priceCents: r.price_cents_snap,
+      oneShot: one(r.bundles)?.one_shot === true,
+    }))
+    const picked = rows[rows.length - 1] ?? null
     if (picked) {
       selection = {
         bundleId: picked.bundle_id,
@@ -248,7 +279,12 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
     signoff_notes: string | null
   } | null
 
-  const history = await loadHistory(supabase, row.unit_id, requestId)
+  const [history, unitHistory, repeat, nextJob] = await Promise.all([
+    loadHistory(supabase, row.unit_id, requestId),
+    loadUnitHistory(supabase, row.unit_id, requestId),
+    loadRepeat(supabase, row.unit_id, requestId),
+    loadNextJob(supabase, viewer.id, requestId),
+  ])
 
   return {
     ok: true,
@@ -297,6 +333,10 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
           }
         : null,
       selection,
+      selections,
+      unitHistory,
+      repeat,
+      nextJob,
       parts: ((partsResult.data ?? []) as PartRow[]).map((part) => {
         const supplier = one(part.suppliers)
         return {
@@ -377,6 +417,105 @@ async function loadHistory(
     }
   }
   return [...codes]
+}
+
+type Supabase = Awaited<ReturnType<typeof createClient>>
+
+const shortDate = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  timeZone: "America/New_York",
+})
+
+/** Repairs done on this unit on earlier calls, newest first (last 12 months). */
+async function loadUnitHistory(
+  supabase: Supabase,
+  unitId: string,
+  requestId: string,
+): Promise<{ title: string; whenLabel: string }[]> {
+  const since = new Date()
+  since.setFullYear(since.getFullYear() - 1)
+  const { data } = await supabase
+    .from("service_requests")
+    .select("id, issue, created_at, service_visits ( visit_bundle_selections ( title_snap ) )")
+    .eq("unit_id", unitId)
+    .neq("id", requestId)
+    .is("deleted_at", null)
+    .gte("created_at", since.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(6)
+  type Row = {
+    issue: string
+    created_at: string
+    service_visits:
+      | { visit_bundle_selections: { title_snap: string }[] | { title_snap: string } | null }[]
+      | { visit_bundle_selections: { title_snap: string }[] | { title_snap: string } | null }
+      | null
+  }
+  const items: { title: string; whenLabel: string }[] = []
+  for (const r of (data ?? []) as Row[]) {
+    const titles = asList(r.service_visits).flatMap((v) =>
+      asList(v.visit_bundle_selections).map((sel) => sel.title_snap),
+    )
+    const when = shortDate.format(new Date(r.created_at))
+    if (titles.length === 0) {
+      items.push({ title: r.issue, whenLabel: when })
+    } else {
+      for (const title of titles) items.push({ title, whenLabel: when })
+    }
+  }
+  return items.slice(0, 5)
+}
+
+async function loadRepeat(
+  supabase: Supabase,
+  unitId: string,
+  requestId: string,
+): Promise<{ count: number; windowDays: number } | null> {
+  const { data: config } = await supabase
+    .from("app_config")
+    .select("repeat_unit_window_days")
+    .eq("id", 1)
+    .maybeSingle()
+  const windowDays = (config as { repeat_unit_window_days: number } | null)?.repeat_unit_window_days ?? 14
+  const since = new Date(Date.now() - windowDays * 86_400_000).toISOString()
+  const { count } = await supabase
+    .from("service_requests")
+    .select("id", { count: "exact", head: true })
+    .eq("unit_id", unitId)
+    .neq("id", requestId)
+    .is("deleted_at", null)
+    .gte("created_at", since)
+  return count && count > 0 ? { count, windowDays } : null
+}
+
+/** The viewer's next job in their My Jobs order, other than this one. */
+async function loadNextJob(
+  supabase: Supabase,
+  profileId: string,
+  requestId: string,
+): Promise<{ id: string; title: string } | null> {
+  const { data } = await supabase
+    .from("service_requests")
+    .select("id, properties ( name ), units ( unit_label )")
+    .eq("assigned_user_id", profileId)
+    .in("board_status", ["assigned", "ready"])
+    .neq("id", requestId)
+    .is("deleted_at", null)
+    .order("my_jobs_position", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (!data) return null
+  const r = data as {
+    id: string
+    properties: { name: string } | { name: string }[] | null
+    units: { unit_label: string } | { unit_label: string }[] | null
+  }
+  return {
+    id: r.id,
+    title: `${one(r.properties)?.name ?? "Property"} ${one(r.units)?.unit_label ?? ""}`.trim(),
+  }
 }
 
 type RequestRow = {

@@ -145,8 +145,8 @@ begin
   end if;
 
   begin
-    perform public.close_visit(req, 'easy', '   ');
-    raise exception 'FAIL: closed with a blank note';
+    perform public.close_visit(req, 'one_off', '   ');
+    raise exception 'FAIL: closed a one-off with a blank note';
   exception
     when others then
       if sqlerrm like 'FAIL:%' then raise; end if;

@@ -4,11 +4,13 @@ import { useEffect, useRef } from "react"
 import { useSyncExternalStore } from "react"
 
 import {
+  addVisitBundle,
   attachVisitFile,
   closeVisit,
   markOnSite,
   markPartInHand,
   recordAttempt,
+  removeVisitBundle,
   savePartsOrder,
   selectVisitBundle,
   startJob,
@@ -92,6 +94,18 @@ function dispatch(command: VisitCommand): Promise<ActionResult<VisitStep>> {
       return selectVisitBundle({
         requestId: command.requestId,
         bundleId: command.bundleId,
+        seenAt: command.seenAt,
+      })
+    case "add_bundle":
+      return addVisitBundle({
+        requestId: command.requestId,
+        bundleId: command.bundleId,
+        seenAt: command.seenAt,
+      })
+    case "remove_bundle":
+      return removeVisitBundle({
+        requestId: command.requestId,
+        selectionId: command.selectionId,
         seenAt: command.seenAt,
       })
     case "save_parts":

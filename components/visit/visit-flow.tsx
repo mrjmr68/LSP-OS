@@ -12,7 +12,8 @@ import {
   markPartInHand,
   recordAttempt,
   savePartsOrder,
-  selectVisitBundle,
+  addVisitBundle,
+  removeVisitBundle,
   startJob,
   type ActionResult,
   type VisitStep,
@@ -23,7 +24,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { mapsDirectionsUrl, runGoEnRoute } from "@/lib/board-rules"
-import type { VisitBundle, VisitModel, VisitPart, VisitSupplier } from "@/lib/visit-data"
+import type { VisitBundle, VisitModel, VisitPart, VisitSelection, VisitSupplier } from "@/lib/visit-data"
 import {
   ATTEMPT_REASONS,
   CLOSE_PATHS,
@@ -38,7 +39,6 @@ import {
   getVisitQueueServerSnapshot,
   isTransportFailure,
   newCommandId,
-  pathAfterBundle,
   readVisitDraft,
   readVisitPhotos,
   readVisitQueue,
@@ -142,6 +142,14 @@ function VisitSession({
   const clientDraftId = useRef(initial.clientDraftId)
   const arrived = useRef(false)
   const hydrated = useRef(false)
+  const working = useRef(model.visit?.status === "working")
+  // Repairs saved on this phone but not yet back from the server, and ones taken off.
+  const [localAdds, setLocalAdds] = useState<VisitSelection[]>([])
+  const [removed, setRemoved] = useState<string[]>([])
+  const picks: VisitSelection[] = [
+    ...model.selections.filter((p) => !removed.includes(p.id)),
+    ...localAdds.filter((a) => !model.selections.some((p) => p.bundleId === a.bundleId)),
+  ]
 
   useEffect(() => {
     const saved = readVisitDraft(model.requestId)
@@ -180,15 +188,20 @@ function VisitSession({
   const canParts = mine || model.viewerRole === "owner"
   const queuedHere = queue.filter((item) => item.requestId === model.requestId).length
   const sync = syncLabel({ offline, queued: queuedHere, conflict })
-  const selected = bundles.find((bundle) => bundle.id === bundleId) ?? null
+  // Once a repair is picked, a job with no other path is a simple repair.
+  const closePath: ClosePath | null =
+    path ?? (picks.length > 0 ? (picks.some((p) => p.oneShot) ? "parts" : "easy") : null)
+  const pickedBundles = picks
+    .map((p) => bundles.find((b) => b.id === p.bundleId))
+    .filter((b): b is VisitBundle => Boolean(b))
   const gaps = closeGaps({
-    path,
+    path: closePath,
     note,
     model: modelText,
     serial,
-    bundleId,
-    requiresModelSerial: selected?.requiresModelSerial === true,
-    oneShot: selected?.oneShot === true,
+    bundleId: picks[0]?.bundleId ?? bundleId,
+    requiresModelSerial: pickedBundles.some((b) => b.requiresModelSerial),
+    oneShot: picks.some((p) => p.oneShot),
     signoff: model.signoff,
     signoffName,
     hasSignature: Boolean(signature) || model.visit?.hasSignature === true,
@@ -354,9 +367,11 @@ function VisitSession({
     return () => navigator.geolocation.clearWatch(watch)
   }, [arrive, mine, model.geofenceRadiusM, model.lat, model.lng, step])
 
-  async function beginJob() {
-    setBusy(true)
-    setFormError(null)
+  /** Start the job clock if it isn't running. Quiet: stays on the current screen. */
+  async function ensureWorking(): Promise<boolean> {
+    if (working.current) {
+      return true
+    }
     const command: VisitCommand = {
       id: newCommandId(),
       requestId: model.requestId,
@@ -366,14 +381,11 @@ function VisitSession({
     const result = await commit(command, () =>
       startJob({ requestId: model.requestId, seenAt: seenAt.current }),
     )
-    setBusy(false)
     if (result === null || (result !== "queued" && result.conflict)) {
-      return
+      return false
     }
-    setStep("diagnose")
-    if (result !== "queued") {
-      router.refresh()
-    }
+    working.current = true
+    return true
   }
 
   async function saveAttempt() {
@@ -419,18 +431,26 @@ function VisitSession({
     setStep("diagnose")
   }
 
-  async function pickBundle(bundle: VisitBundle) {
+  async function addRepair(bundle: VisitBundle) {
+    if (picks.some((p) => p.bundleId === bundle.id)) {
+      setStep("close")
+      return
+    }
     setBusy(true)
     setFormError(null)
+    if (!(await ensureWorking())) {
+      setBusy(false)
+      return
+    }
     const command: VisitCommand = {
       id: newCommandId(),
       requestId: model.requestId,
       seenAt: seenAt.current,
-      kind: "select_bundle",
+      kind: "add_bundle",
       bundleId: bundle.id,
     }
     const result = await commit(command, () =>
-      selectVisitBundle({
+      addVisitBundle({
         requestId: model.requestId,
         bundleId: bundle.id,
         seenAt: seenAt.current,
@@ -440,18 +460,70 @@ function VisitSession({
     if (result === null || (result !== "queued" && result.conflict)) {
       return
     }
-    const nextPath = pathAfterBundle(path, bundle.oneShot)
+    setLocalAdds((list) => [
+      ...list,
+      {
+        id: `local-${bundle.id}`,
+        bundleId: bundle.id,
+        code: bundle.code,
+        title: bundle.title,
+        priceCents: bundle.priceCents,
+        oneShot: bundle.oneShot,
+      },
+    ])
     setBundleId(bundle.id)
-    setPath(nextPath)
+    setQuery("")
     if (bundle.oneShot) {
+      setPath("parts")
       setNotice("That repair needs a part. Model and serial are required before you leave.")
       setStep("parts")
+    } else {
+      setPath((current) => (current === "estimate" || current === "parts" ? current : "easy"))
+      setStep("close")
+    }
+    if (result !== "queued") {
+      router.refresh()
+    }
+  }
+
+  function onRemoveClick(event: React.MouseEvent<HTMLButtonElement>) {
+    const pick = picks.find((p) => p.id === event.currentTarget.dataset.pick)
+    if (pick) void removeRepair(pick)
+  }
+
+  async function removeRepair(pick: VisitSelection) {
+    if (pick.id.startsWith("local-")) {
+      setLocalAdds((list) => list.filter((p) => p.id !== pick.id))
       return
     }
-    setStep(nextPath === "parts" ? "parts" : "close")
+    setBusy(true)
+    setFormError(null)
+    const command: VisitCommand = {
+      id: newCommandId(),
+      requestId: model.requestId,
+      seenAt: seenAt.current,
+      kind: "remove_bundle",
+      selectionId: pick.id,
+    }
+    const result = await commit(command, () =>
+      removeVisitBundle({
+        requestId: model.requestId,
+        selectionId: pick.id,
+        seenAt: seenAt.current,
+      }),
+    )
+    setBusy(false)
+    if (result === null || (result !== "queued" && result.conflict)) {
+      return
+    }
+    setRemoved((ids) => [...ids, pick.id])
+    if (result !== "queued") {
+      router.refresh()
+    }
   }
 
   async function finishVisit() {
+    const path = closePath
     if (!path || gaps.length > 0) {
       setFormError(gaps[0] ?? "Pick a path.")
       return
@@ -672,7 +744,7 @@ function VisitSession({
       setLeaveOpen(true)
       return
     }
-    router.push("/board")
+    router.push("/board?view=mine")
   }
 
   async function onTheWay() {
@@ -700,187 +772,230 @@ function VisitSession({
     router.refresh()
   }
 
-  const quick = bundles
-    .filter((bundle) => bundle.quickSelectRank !== null)
-    .slice(0, 8)
+  const quick = bundles.filter((bundle) => bundle.quickSelectRank !== null).slice(0, 4)
   const needle = query.trim().toLowerCase()
   const results = needle
     ? bundles.filter((bundle) =>
         `${bundle.code} ${bundle.title} ${bundle.narrative}`.toLowerCase().includes(needle),
       )
     : quick
+  const total = picks.reduce((sum, p) => sum + p.priceCents, 0)
+  const context = `${model.propertyName} · ${model.unitLabel} · ${model.issue}`
+  const isHub = step === "arrival" || step === "bundle" || (step === "diagnose" && !path)
+  const addingAnother = picks.length > 0
+
+  // One primary action per screen, pinned to the bottom.
+  let primary: React.ReactNode = null
+  if (step === "before" && mine && (model.boardStatus === "assigned" || model.boardStatus === "ready")) {
+    primary = (
+      <>
+        <BigButton disabled={busy} onClick={() => void onTheWay()}>
+          {busy ? "Starting…" : "On my way"}
+        </BigButton>
+        <p className="text-center text-[13px] text-muted-foreground">
+          Opens directions and starts your drive time
+        </p>
+        {model.contactPhone ? (
+          <a href={`tel:${model.contactPhone}`} className="flex h-12 items-center justify-center rounded-xl border-2 border-ink bg-card text-[17px] font-bold">
+            Call the office
+          </a>
+        ) : null}
+      </>
+    )
+  } else if (step === "en_route") {
+    primary = (
+      <>
+        <BigButton disabled={busy} onClick={() => void arrive("tap", null, null)}>
+          {busy ? "Saving…" : "I'm here"}
+        </BigButton>
+        <p className="text-center text-[13px] text-muted-foreground">
+          The app also marks you here when you pull in
+        </p>
+      </>
+    )
+  } else if (step === "close") {
+    primary = (
+      <>
+        <BigButton disabled={busy || gaps.length > 0} onClick={() => void finishVisit()}>
+          {busy ? "Closing…" : "Close visit"}
+        </BigButton>
+        <p className="text-center text-[13px] text-muted-foreground">
+          {path === "estimate" ? "Sends the estimate draft to owner review" : "Sends the draft to owner review"}
+          {model.nextJob ? ` · Next: ${model.nextJob.title}` : ""}
+        </p>
+      </>
+    )
+  }
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-md flex-col">
-      <header className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <Button type="button" variant="outline" size="field" onClick={goBoard}>
-            Board
-          </Button>
-          <div className="min-w-0">
-            <p className="font-display text-xl leading-none font-bold tracking-wide">{model.displayNumber}</p>
-            <p className="truncate text-sm text-muted-foreground">
-              {model.propertyName} · {model.unitLabel}
-            </p>
-          </div>
-          <span className="ml-auto inline-flex min-h-12 items-center gap-2 text-sm">
-            <span
-              aria-hidden
-              className={`size-2.5 rounded-full ${
-                sync.tone === "synced"
-                  ? "bg-synced"
-                  : sync.tone === "offline"
-                    ? "bg-muted-foreground"
-                    : "bg-amber-500"
-              }`}
-            />
-            {sync.label}
-          </span>
-        </div>
+      <header className="flex items-center justify-between gap-3 px-5 pt-4">
+        <button type="button" onClick={goBoard} className="flex min-h-11 items-center text-[15px] font-semibold text-muted-foreground">
+          ← My jobs
+        </button>
+        <span
+          role="status"
+          className={
+            "rounded-full px-2.5 py-1 text-[13px] font-bold " +
+            (sync.tone === "synced" ? "bg-busy text-busy-foreground" : "bg-free text-free-foreground")
+          }
+        >
+          {sync.label}
+        </span>
       </header>
-      <main className="flex flex-1 flex-col gap-4 px-4 py-4 pb-16">
-        <p className="text-base leading-6">{model.issue}</p>
+
+      <main className={"flex flex-1 flex-col gap-3 px-5 pt-2 " + (primary ? "pb-52" : "pb-10")}>
         {conflict ? (
-          <p role="alert" className="rounded-lg border border-amber-700/40 bg-amber-50 px-3 py-3 text-sm leading-6">
-            The board changed this call while this phone was offline. The board stands. Tell an owner what you saved here.
+          <p role="alert" className="rounded-xl bg-free px-4 py-3 text-sm leading-6 text-free-foreground">
+            The Board changed this call while this phone was offline. The Board stands. Tell an owner what you saved here.
           </p>
         ) : null}
-        {notice ? <p className="text-sm leading-6">{notice}</p> : null}
         {formError ? (
-          <p role="alert" className="text-sm leading-6 text-destructive">
+          <p role="alert" className="rounded-xl bg-destructive/10 px-4 py-3 text-sm font-medium leading-6 text-destructive">
             {formError}
           </p>
         ) : null}
+        {notice && step !== "done" ? <p role="status" className="text-sm leading-6">{notice}</p> : null}
 
-        {step === "summary" || step === "before" ? (
-          <JobSummary model={model} />
-        ) : null}
-        {step === "before" && mine && (model.boardStatus === "assigned" || model.boardStatus === "ready") ? (
-          <Button type="button" size="field" disabled={busy} onClick={() => void onTheWay()}>
-            {busy ? "Starting…" : "On the way"}
-          </Button>
-        ) : null}
-        {step === "en_route" || step === "arrival" ? (
-          <AccessBlock model={model} />
-        ) : null}
-        {step === "en_route" ? (
+        {/* ---------------- Heading there ---------------- */}
+        {step === "before" || step === "summary" ? (
           <>
-            <p className="text-sm leading-6 text-muted-foreground">
-              Travel is running. When you are at the property, the fence can mark you here. If it does not, tap the button.
-            </p>
-            <Button type="button" size="field" disabled={busy} onClick={() => void arrive("tap", null, null)}>
-              {busy ? "Saving…" : "I'm here"}
-            </Button>
+            <Eyebrow>{step === "before" && mine ? "Next stop" : "Job"}</Eyebrow>
+            <div>
+              <h1 className="text-[32px] leading-tight font-extrabold">{model.propertyName}</h1>
+              <p className="text-2xl font-bold">Unit {model.unitLabel}</p>
+              <p className="text-lg text-muted-foreground">{model.issue}</p>
+            </div>
+            {model.repeat ? (
+              <p className="rounded-xl bg-free px-4 py-3 text-[15px] font-bold text-free-foreground">
+                {ordinal(model.repeat.count + 1)} call on this unit in {model.repeat.windowDays} days
+              </p>
+            ) : null}
+            {model.priority === "high" ? (
+              <p className="rounded-xl border-2 border-high px-4 py-2 text-[15px] font-bold text-high">High priority</p>
+            ) : null}
+            <GettingIn model={model} />
+            <UnitBefore items={model.unitHistory} />
+            {step === "summary" ? <JobSummary model={model} /> : null}
           </>
         ) : null}
-        {step === "arrival" ? (
-          <Button type="button" size="field" disabled={busy} onClick={() => void beginJob()}>
-            {busy ? "Starting…" : "Tools on equipment — Start job"}
-          </Button>
-        ) : null}
-        {step === "en_route" || step === "arrival" ? (
-          <Button type="button" variant="outline" size="field" onClick={() => setAttemptOpen(true)}>
-            Couldn&apos;t get in
-          </Button>
-        ) : null}
 
-        {step === "diagnose" ? (
-          <section className="flex flex-col gap-3">
-            <h1 className="font-display text-2xl font-semibold tracking-wide">What kind of job?</h1>
-            <div className="grid grid-cols-2 gap-2">
-              {CLOSE_PATHS.map((item) => (
-                <Button
-                  key={item.id}
-                  type="button"
-                  size="field"
-                  variant={path === item.id ? "default" : "outline"}
-                  onClick={() => choosePath(item.id)}
-                >
-                  {item.label}
-                </Button>
-              ))}
+        {/* ---------------- Driving ---------------- */}
+        {step === "en_route" ? (
+          <>
+            <Eyebrow>Driving to</Eyebrow>
+            <div>
+              <h1 className="text-[32px] leading-tight font-extrabold">{model.propertyName}</h1>
+              <p className="text-2xl font-bold">Unit {model.unitLabel}</p>
+              <p className="text-lg text-muted-foreground">{model.issue}</p>
             </div>
-            {path && path !== "easy" ? (
-              <GuidedFields
-                path={path}
-                modelText={modelText}
-                serial={serial}
-                equipmentSize={equipmentSize}
-                readings={readings}
-                onModel={setModelText}
-                onSerial={setSerial}
-                onSize={setEquipmentSize}
-                onReadings={setReadings}
-                onPhoto={(url, kind) => void addPhoto(model.requestId, url, kind, photos, setPhotos, setFormError)}
-              />
-            ) : null}
-            {path && path !== "easy" ? (
-              <Button
-                type="button"
-                size="field"
-                onClick={() => setStep(path === "one_off" ? "close" : "bundle")}
-              >
-                {path === "one_off" ? "Continue to close" : "Pick the repair"}
-              </Button>
-            ) : null}
-          </section>
+            <GettingIn model={model} />
+            <button type="button" onClick={() => openMapsTab(mapsDirectionsUrl(model.address, null))} className="min-h-11 self-start text-[15px] font-semibold text-primary underline">
+              Open directions again
+            </button>
+            <button type="button" onClick={() => { setAttemptReason(null); setAttemptOpen(true) }} className="min-h-11 self-start text-[15px] text-muted-foreground underline">
+              Couldn&apos;t get in
+            </button>
+          </>
         ) : null}
 
-        {step === "bundle" ? (
-          <section className="flex flex-col gap-3">
-            <h1 className="font-display text-2xl font-semibold tracking-wide">Pick the repair</h1>
-            <Label htmlFor="bundle-search">Search code or words</Label>
+        {/* ---------------- What did you find? ---------------- */}
+        {isHub && mine ? (
+          <>
+            <p className="text-sm font-semibold text-muted-foreground">{context}</p>
+            <h1 className="text-[30px] leading-tight font-extrabold">
+              {addingAnother ? "Add another repair" : "What did you find?"}
+            </h1>
+            <Eyebrow>Search repairs</Eyebrow>
             <Input
-              id="bundle-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="min-h-12 text-base"
-              placeholder="CAP, capacitor"
+              placeholder="capacitor, drain, contactor…"
+              aria-label="Search repairs"
+              className="h-14 rounded-xl border-2 border-ink text-lg"
             />
+            <Eyebrow>{needle ? `${results.length} match${results.length === 1 ? "" : "es"}` : "Most common"}</Eyebrow>
             {results.length === 0 ? (
-              <p className="text-sm leading-6">No match — use One-off.</p>
+              <p className="text-[15px] text-muted-foreground">Nothing matches. Try another word, or use One-off below.</p>
             ) : (
               <ul className="flex flex-col gap-2">
-                {results.map((bundle) => (
-                  <li key={bundle.id}>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void pickBundle(bundle)}
-                      className="flex min-h-16 w-full flex-col items-start rounded-lg border border-border bg-card px-3 py-3 text-left"
-                    >
-                      <span className="font-medium">
-                        {bundle.code} · {bundle.title}
-                      </span>
-                      <span className="text-sm">{formatDollars(bundle.priceCents)}</span>
-                      {bundle.pricingKind === "variable" ? (
-                        <span className="text-sm text-muted-foreground">
-                          Price adjusts for the actual part
-                          {bundle.referencePart ? ` · ${bundle.referencePart}` : ""}.
+                {results.map((bundle) => {
+                  const already = picks.some((p) => p.bundleId === bundle.id)
+                  return (
+                    <li key={bundle.id}>
+                      <button
+                        type="button"
+                        disabled={busy || already}
+                        onClick={() => void addRepair(bundle)}
+                        className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left disabled:opacity-60"
+                      >
+                        <span>
+                          <span className="block text-[17px] font-bold">{bundle.title}</span>
+                          {bundle.oneShot ? (
+                            <span className="block text-[13px] text-muted-foreground">Needs a part and a return trip</span>
+                          ) : already ? (
+                            <span className="block text-[13px] text-muted-foreground">On this visit</span>
+                          ) : null}
                         </span>
-                      ) : null}
-                      {bundle.oneShot ? (
-                        <span className="text-sm text-muted-foreground">This one needs a part and a return trip.</span>
-                      ) : null}
-                    </button>
-                  </li>
-                ))}
+                        <span className="text-[17px] font-bold tabular-nums">{formatDollars(bundle.priceCents).replace(".00", "")}</span>
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
-            <Button
-              type="button"
-              variant="outline"
-              size="field"
-              onClick={() => {
-                setPath("one_off")
-                setStep("close")
-              }}
-            >
-              No bundle fits — One-off
-            </Button>
+            {!addingAnother ? (
+              <div className="grid grid-cols-2 gap-2">
+                <SoftButton disabled={busy} onClick={() => { setAttemptReason("no_access"); setAttemptOpen(true) }}>
+                  No access
+                </SoftButton>
+                <SoftButton
+                  disabled={busy}
+                  onClick={() => {
+                    setPath("one_off")
+                    void ensureWorking().then((ok) => ok && setStep("close"))
+                  }}
+                >
+                  One-off repair
+                </SoftButton>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setStep("close")} className="min-h-11 self-start text-[15px] font-semibold text-primary underline">
+                Back to close
+              </button>
+            )}
+          </>
+        ) : null}
+
+        {/* Need a part / Estimate: the existing guided fields, one step each */}
+        {step === "diagnose" && path ? (
+          <section className="flex flex-col gap-3">
+            <p className="text-sm font-semibold text-muted-foreground">{context}</p>
+            <h1 className="text-[30px] leading-tight font-extrabold">
+              {path === "parts" ? "Need a part" : path === "estimate" ? "Estimate" : CLOSE_PATHS.find((c) => c.id === path)?.label}
+            </h1>
+            <GuidedFields
+              path={path}
+              modelText={modelText}
+              serial={serial}
+              equipmentSize={equipmentSize}
+              readings={readings}
+              onModel={setModelText}
+              onSerial={setSerial}
+              onSize={setEquipmentSize}
+              onReadings={setReadings}
+              onPhoto={(url, kind) => void addPhoto(model.requestId, url, kind, photos, setPhotos, setFormError)}
+            />
+            <BigButton onClick={() => setStep(path === "one_off" ? "close" : "bundle")}>
+              {path === "one_off" ? "Continue to close" : "Pick the repair"}
+            </BigButton>
+            <button type="button" onClick={() => { setPath(picks.length > 0 ? "easy" : null); setStep(picks.length > 0 ? "close" : "bundle") }} className="min-h-11 self-start text-[15px] text-muted-foreground underline">
+              Back
+            </button>
           </section>
         ) : null}
 
+        {/* Parts form (Stage 4 restyles this) */}
         {step === "parts" || (step === "parts_desk" && canParts) ? (
           <PartsForm
             modelText={modelText}
@@ -901,9 +1016,7 @@ function VisitSession({
           />
         ) : null}
         {step === "parts" ? (
-          <Button type="button" size="field" onClick={() => setStep("close")}>
-            Continue to close
-          </Button>
+          <BigButton onClick={() => setStep("close")}>Continue to close</BigButton>
         ) : null}
         {step === "parts_desk" && canParts ? (
           <>
@@ -911,8 +1024,8 @@ function VisitSession({
               Save part order
             </Button>
             {model.parts.map((part) => (
-              <div key={part.id} className="rounded-lg border border-border px-3 py-3 text-sm leading-6">
-                <p className="font-medium">{part.description}</p>
+              <div key={part.id} className="rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6">
+                <p className="font-bold">{part.description}</p>
                 <p>{part.orderNumber ? `Order ${part.orderNumber}` : "No order number yet"}</p>
                 <p>{part.status === "in_hand" ? "In hand" : part.status === "ordered" ? "Ordered" : "Needed"}</p>
                 {part.status !== "in_hand" ? (
@@ -925,70 +1038,141 @@ function VisitSession({
           </>
         ) : null}
 
+        {/* ---------------- Ready to close? ---------------- */}
         {step === "close" ? (
-          <section className="flex flex-col gap-3">
-            <h1 className="font-display text-2xl font-semibold tracking-wide">Close the visit</h1>
-            <p className="text-sm leading-6">
-              {selected ? `${selected.code} · ${selected.title} · ${formatDollars(selected.priceCents)}` : path === "one_off" ? "One-off. An owner sets the price." : "No repair picked yet."}
-            </p>
-            <Label htmlFor="tech-note">Note</Label>
-            <textarea
-              id="tech-note"
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              className="min-h-24 w-full rounded-lg border border-input bg-transparent px-3 py-3 text-base"
-            />
+          <>
+            <p className="text-sm font-semibold text-muted-foreground">{context}</p>
+            <h1 className="text-[30px] leading-tight font-extrabold">Ready to close?</h1>
+            <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
+              <Eyebrow>{path === "estimate" ? "On the estimate" : "Repairs on this visit"}</Eyebrow>
+              {picks.length === 0 ? (
+                <p className="text-[15px] text-muted-foreground">
+                  {path === "one_off" ? "One-off. Say what you did below; an owner sets the price." : "No repair picked yet."}
+                </p>
+              ) : (
+                picks.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-3">
+                    <span className="text-[17px] font-bold">{p.title}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-[17px] font-bold tabular-nums">{formatDollars(p.priceCents).replace(".00", "")}</span>
+                      <button type="button" disabled={busy} data-pick={p.id} onClick={onRemoveClick} aria-label={`Remove ${p.title}`} className="flex size-9 items-center justify-center rounded-lg text-xl text-muted-foreground hover:bg-muted">
+                        ×
+                      </button>
+                    </span>
+                  </div>
+                ))
+              )}
+              <button type="button" disabled={busy} onClick={() => { setQuery(""); setStep("bundle") }} className="mt-1 h-12 rounded-xl border-2 border-dashed border-ink/60 text-[17px] font-bold">
+                Add another repair
+              </button>
+            </section>
+            {picks.length > 1 ? (
+              <p className="rounded-xl bg-free px-4 py-3 text-[15px] leading-6 font-medium text-free-foreground">
+                {picks.length} repairs on one visit ({formatDollars(total).replace(".00", "")} listed). An owner sets the final price at review, since travel is only charged once.
+              </p>
+            ) : null}
             {path === "one_off" || path === "estimate" ? (
               <>
-                <Label htmlFor="narrative">What you did</Label>
-                <textarea
-                  id="narrative"
-                  value={narrative}
-                  onChange={(event) => setNarrative(event.target.value)}
-                  className="min-h-24 w-full rounded-lg border border-input bg-transparent px-3 py-3 text-base"
-                />
-                <Label htmlFor="materials">Materials</Label>
-                <Input id="materials" value={materials} onChange={(event) => setMaterials(event.target.value)} className="min-h-12 text-base" />
+                <Eyebrow>What you did</Eyebrow>
+                <textarea value={narrative} onChange={(event) => setNarrative(event.target.value)} className={fieldClass} aria-label="What you did" />
+                <Eyebrow>Materials</Eyebrow>
+                <Input value={materials} onChange={(event) => setMaterials(event.target.value)} className="h-12 rounded-xl text-base" aria-label="Materials" />
               </>
             ) : null}
+            <Eyebrow>Note · optional</Eyebrow>
+            <textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Type, or tap the mic on your keyboard to talk"
+              className={fieldClass}
+              aria-label="Note"
+            />
+            <label className="flex h-12 cursor-pointer items-center justify-center rounded-xl border-2 border-ink bg-card text-[17px] font-bold">
+              {photos.length > 0 ? `${photos.length} photo${photos.length === 1 ? "" : "s"} · add another` : "Add photo · optional"}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) {
+                    void shrinkPhoto(file).then((url) => {
+                      if (url) void addPhoto(model.requestId, url, "photo", photos, setPhotos, setFormError)
+                    })
+                  }
+                }}
+              />
+            </label>
             {model.signoff === "walkthrough_signature" ? (
               <>
                 <p className="text-sm leading-6">{model.signoffNotes || "This property wants a name and a signature."}</p>
                 <Label htmlFor="signoff-name">Name</Label>
-                <Input id="signoff-name" value={signoffName} onChange={(event) => setSignoffName(event.target.value)} className="min-h-12 text-base" />
+                <Input id="signoff-name" value={signoffName} onChange={(event) => setSignoffName(event.target.value)} className="h-12 rounded-xl text-base" />
                 <SignaturePad onChange={setSignature} />
               </>
             ) : null}
             {model.signoff === "photos" ? (
-              <p className="text-sm leading-6">This property needs a photo before you close. A nameplate photo does not count.</p>
+              <p className="text-sm leading-6">This property needs a photo before you close.</p>
             ) : null}
             {gaps.length > 0 ? (
-              <ul className="flex flex-col gap-1 text-sm leading-6">
+              <ul className="flex flex-col gap-1 rounded-xl bg-muted px-4 py-3 text-[15px] leading-6">
                 {gaps.map((gap) => (
                   <li key={gap}>{gap}</li>
                 ))}
               </ul>
             ) : null}
-            <Button type="button" size="field" disabled={busy || gaps.length > 0} onClick={() => void finishVisit()}>
-              {busy ? "Closing…" : "Close"}
-            </Button>
-          </section>
+          </>
         ) : null}
 
-        {step === "done" ? (
-          <p className="text-base leading-6">
-            {notice ?? "Visit closed. The board has the new column."}
-          </p>
-        ) : null}
-        {step === "attempt_done" ? (
-          <p className="text-base leading-6">Couldn&apos;t get in. The call stays open for a return trip.</p>
-        ) : null}
-        {model.history.length > 0 && step !== "close" ? (
-          <p className="text-sm leading-6 text-muted-foreground">
-            Recent repairs here: {model.history.join(", ")}
-          </p>
+        {/* ---------------- Done ---------------- */}
+        {step === "done" || step === "attempt_done" ? (
+          <section className="flex flex-col gap-3 pt-6">
+            <h1 className="text-[30px] leading-tight font-extrabold">
+              {step === "done" ? "Visit closed" : "Couldn't get in"}
+            </h1>
+            <p className="text-[17px] leading-7 text-muted-foreground">
+              {step === "done"
+                ? notice ?? "The draft is with the owners for review."
+                : "Saved for owner review. The call stays open for a return trip."}
+            </p>
+            {model.nextJob ? (
+              <a href={`/board/visit/${model.nextJob.id}`} className="flex h-16 flex-col items-center justify-center rounded-xl bg-primary text-primary-foreground">
+                <span className="text-[13px] font-bold tracking-[0.08em] uppercase opacity-90">Next</span>
+                <span className="text-xl font-bold">{model.nextJob.title}</span>
+              </a>
+            ) : (
+              <a href="/board?view=mine" className="flex h-14 items-center justify-center rounded-xl bg-primary text-xl font-bold text-primary-foreground">
+                Back to My jobs
+              </a>
+            )}
+          </section>
         ) : null}
       </main>
+
+      {primary ? (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card">
+          <div className="mx-auto flex w-full max-w-md flex-col gap-2 px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            {primary}
+          </div>
+        </div>
+      ) : null}
+
+      {isHub && mine && !addingAnother ? (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card">
+          <div className="mx-auto w-full max-w-md px-5 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <Eyebrow>Not a simple fix?</Eyebrow>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <OutlineButton disabled={busy} onClick={() => void ensureWorking().then((ok) => ok && choosePath("parts"))}>
+                Need a part
+              </OutlineButton>
+              <OutlineButton disabled={busy} onClick={() => void ensureWorking().then((ok) => ok && choosePath("estimate"))}>
+                Estimate
+              </OutlineButton>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Sheet open={attemptOpen} title="Couldn't get in" onClose={() => setAttemptOpen(false)}>
         <div className="flex flex-col gap-3">
@@ -1029,6 +1213,90 @@ function VisitSession({
       </Sheet>
     </div>
   )
+}
+
+const fieldClass =
+  "min-h-24 w-full rounded-xl border-2 border-ink/80 bg-card px-3 py-3 text-base outline-none focus-visible:border-primary"
+
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return <p className="text-[13px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{children}</p>
+}
+
+function BigButton({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="h-[72px] w-full rounded-2xl bg-primary text-2xl font-bold text-primary-foreground disabled:opacity-50"
+    >
+      {children}
+    </button>
+  )
+}
+
+function OutlineButton({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick} className="h-14 rounded-xl border-2 border-ink bg-card text-[17px] font-bold disabled:opacity-50">
+      {children}
+    </button>
+  )
+}
+
+function SoftButton({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick} className="h-14 rounded-xl border border-ink/40 bg-secondary/60 text-[17px] font-bold disabled:opacity-50">
+      {children}
+    </button>
+  )
+}
+
+function GettingIn({ model }: { model: VisitModel }) {
+  const text = [model.accessText, model.lockbox].filter(Boolean).join(" ")
+  return (
+    <section className="rounded-xl border border-border bg-card px-4 py-3">
+      <Eyebrow>Getting in</Eyebrow>
+      <p className="mt-1 text-lg leading-snug font-bold">{text || "No access notes for this property."}</p>
+      {model.contactName && model.contactName !== "Contact" ? (
+        <p className="mt-1 text-[15px] text-muted-foreground">Contact: {model.contactName}</p>
+      ) : null}
+    </section>
+  )
+}
+
+function UnitBefore({ items }: { items: { title: string; whenLabel: string }[] }) {
+  return (
+    <section className="rounded-xl border border-border bg-card px-4 py-3">
+      <Eyebrow>This unit before</Eyebrow>
+      {items.length === 0 ? (
+        <p className="mt-1 text-[15px] text-muted-foreground">No calls on this unit in the last year.</p>
+      ) : (
+        <ul className="mt-1 flex flex-col gap-1">
+          {items.map((item, index) => (
+            <li key={`${item.title}-${index}`} className="flex justify-between gap-3 text-[16px]">
+              <span className="font-semibold">{item.title}</span>
+              <span className="shrink-0 text-muted-foreground">{item.whenLabel}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function ordinal(n: number): string {
+  if (n === 2) return "Second"
+  if (n === 3) return "Third"
+  if (n === 4) return "Fourth"
+  return `${n}th`
 }
 
 function JobSummary({ model }: { model: VisitModel }) {
@@ -1377,7 +1645,8 @@ function openingStep(model: VisitModel, draft: VisitDraft | null): Step {
     return "arrival"
   }
   if (status === "working") {
-    return draft?.step ?? "diagnose"
+    // Coming back to a job with repairs on it: straight to close.
+    return draft?.step ?? (model.selections.length > 0 ? "close" : "diagnose")
   }
   if (status === "attempt") {
     return "attempt_done"

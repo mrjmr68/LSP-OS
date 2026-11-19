@@ -21,6 +21,8 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261119140000_sms_consent.sql` | SMS consent records for the Twilio A2P campaign. Signed-out people record consent through `record_sms_consent()` (the `/text-updates` page); only owners can read the records. Each row keeps the exact wording agreed to. |
 | `20261119150000_setup_people.sql` | Setup screens: `suppliers.active` (retire a supplier), owners may unlink a contact from a property, a trigger that always keeps one active owner, and `create_customer()` which adds a customer with its billing contact in one step. |
 | `20261119160000_setup_people_no_anon.sql` | Removes signed-out access to `create_customer()` and the owner-guard trigger function. |
+| `20261119170000_multi_repair.sql` | Several repairs on one visit: `add_visit_bundle()` adds a repair and keeps earlier picks; `remove_visit_bundle()` takes one off (clears the parts path if no part-needing repair remains). Closing already invoices every repair. |
+| `20261119180000_optional_note.sql` | Same `close_visit()`; the note is optional on a simple repair and still required for parts, estimate and one-off. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
@@ -90,6 +92,12 @@ Phone starts as `unset` when the auth user has no phone in metadata. Fill the re
 - A tech cannot retire a supplier or unlink a contact; an owner can.
 - The last active owner cannot be demoted or deactivated; with a second owner, the first can step down.
 - `create_customer()` is owners only and links the new billing contact.
+
+`supabase/tests/multi_repair_proof.sql`
+
+- Adding a repair keeps the earlier ones; the same repair twice is ignored.
+- Removing the part-needing repair clears the parts path; only the assigned tech can remove.
+- A simple-repair close with a blank note drafts one invoice line per repair (two lines, right total).
 
 ## Rules encoded for later milestones
 

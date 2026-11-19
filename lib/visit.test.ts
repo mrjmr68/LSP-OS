@@ -34,12 +34,15 @@ const base = {
   partDescription: "",
 }
 
-test("easy close needs a repair and a note", () => {
-  assert.deepEqual(closeGaps({ ...base, bundleId: null, note: "  " }), [
-    "Write a note.",
-    "Pick a repair.",
-  ])
+test("easy close needs a repair; the note is optional", () => {
+  assert.deepEqual(closeGaps({ ...base, bundleId: null, note: "  " }), ["Pick a repair."])
+  assert.deepEqual(closeGaps({ ...base, note: "" }), [])
   assert.deepEqual(closeGaps(base), [])
+})
+
+test("one-off and estimate still need a note", () => {
+  assert.ok(closeGaps({ ...base, path: "one_off", note: "" }).includes("Write a note."))
+  assert.ok(closeGaps({ ...base, path: "estimate", note: "" }).includes("Write a note."))
 })
 
 test("parts close needs typed model and serial, not a photo", () => {
