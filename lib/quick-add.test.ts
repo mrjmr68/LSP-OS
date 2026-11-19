@@ -43,3 +43,25 @@ test("create path forces the quick add defaults", () => {
   assert.equal(source.includes("input.source"), false)
   assert.equal(source.includes("input.reportedByResident"), false)
 })
+
+import { defaultContactFor } from "./quick-add"
+
+test("Quick Add picks the property's contact for you", () => {
+  const contacts = [
+    { id: "c1", name: "Pat", customerId: "w", customerName: "W", phone: null },
+    { id: "c2", name: "Dana", customerId: "w", customerName: "W", phone: null },
+    { id: "c3", name: "Lee", customerId: "x", customerName: "X", phone: null },
+  ]
+  const properties = [
+    { id: "p1", name: "A", customerId: "w", customerName: "W", address: "", residentMode: null, residentNotes: null },
+    { id: "p2", name: "B", customerId: "w", customerName: "W", address: "", residentMode: null, residentNotes: null },
+    { id: "p3", name: "C", customerId: "x", customerName: "X", address: "", residentMode: null, residentNotes: null },
+  ]
+  const links = [
+    { contactId: "c1", propertyId: "p1" },
+    { contactId: "c2", propertyId: "p1", isPrimary: true },
+  ]
+  assert.equal(defaultContactFor("p1", contacts, links, properties)?.id, "c2")
+  assert.equal(defaultContactFor("p2", contacts, links, properties)?.id, "c1")
+  assert.equal(defaultContactFor("p3", contacts, links, properties)?.id, "c3")
+})

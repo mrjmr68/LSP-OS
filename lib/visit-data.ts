@@ -102,6 +102,8 @@ export type VisitModel = {
   unitHistory: { title: string; whenLabel: string }[]
   /** Other calls on this unit inside the repeat window (14 days by default). */
   repeat: { count: number; windowDays: number } | null
+  /** Over this total, the property wants an estimate first (null = no rule). */
+  estimateOverCents: number | null
   /** The viewer's next job after this one, for "Next: …" on close. */
   nextJob: { id: string; title: string } | null
 }
@@ -185,7 +187,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
     await Promise.all([
       supabase
         .from("property_contract")
-        .select("site_access_text, lockbox_info, signoff_requirement, signoff_notes")
+        .select("site_access_text, lockbox_info, signoff_requirement, signoff_notes, requires_estimate_over_cents")
         .eq("property_id", row.property_id)
         .maybeSingle(),
       supabase
@@ -277,6 +279,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
     lockbox_info: string | null
     signoff_requirement: string | null
     signoff_notes: string | null
+    requires_estimate_over_cents: number | null
   } | null
 
   const [history, unitHistory, repeat, nextJob] = await Promise.all([
@@ -334,6 +337,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         : null,
       selection,
       selections,
+      estimateOverCents: contract?.requires_estimate_over_cents ?? null,
       unitHistory,
       repeat,
       nextJob,

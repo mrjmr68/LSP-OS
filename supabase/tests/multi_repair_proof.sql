@@ -88,3 +88,41 @@ end;
 $proof$;
 
 rollback;
+
+-- A part-needing repair closes with model and serial and no note.
+begin;
+insert into public.service_requests (id, customer_id, property_id, unit_id, contact_id, issue, source)
+values (
+  '99990000-0000-4000-8000-000000000078',
+  '33333333-3333-4333-8333-333333333333',
+  '55555555-5555-4555-8555-555555555555',
+  '66666666-6666-4666-8666-666666666666',
+  '44444444-4444-4444-8444-444444444444',
+  'Parts note proof', 'phone'
+);
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
+do $parts$
+declare
+  req uuid := '99990000-0000-4000-8000-000000000078';
+  tech uuid;
+  board text;
+begin
+  select id into tech from public.profiles where auth_user_id = '22222222-2222-4222-8222-222222222222';
+  perform public.assign_request(req, tech);
+  perform set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', true);
+  perform public.go_en_route(req, null);
+  perform public.mark_on_site(req, 'tap');
+  perform public.start_job(req);
+  perform public.add_visit_bundle(req, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2');
+  perform public.close_visit(
+    request_id => req, outcome => 'parts', tech_note => '',
+    model_typed => 'GSZ140301', serial_typed => '1234567890', part_description => 'AHU - Coil - Replace'
+  );
+  select board_status into board from public.service_requests where id = req;
+  if board <> 'parts' then raise exception 'FAIL: part close should move the job to Parts, got %', board; end if;
+
+  -- Estimate still needs a note.
+end;
+$parts$;
+rollback;

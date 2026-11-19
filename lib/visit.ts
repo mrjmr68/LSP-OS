@@ -30,21 +30,37 @@ export type VisitStatus =
   | "attempt"
   | "cancelled"
 
+/** Diagnostic readings (Nov 18 design). Any can be left blank. */
 export type Readings = {
-  superheat: string
-  subcool: string
-  deltaT: string
+  returnAir: string
+  supplyAir: string
   suction: string
   liquid: string
+  suctionLine: string
+  liquidLine: string
 }
 
 export const emptyReadings = (): Readings => ({
-  superheat: "",
-  subcool: "",
-  deltaT: "",
+  returnAir: "",
+  supplyAir: "",
   suction: "",
   liquid: "",
+  suctionLine: "",
+  liquidLine: "",
 })
+
+export const READING_FIELDS: { key: keyof Readings; label: string; unit: string }[] = [
+  { key: "returnAir", label: "Return air", unit: "°F" },
+  { key: "supplyAir", label: "Supply air", unit: "°F" },
+  { key: "suction", label: "Suction", unit: "psi" },
+  { key: "liquid", label: "Liquid", unit: "psi" },
+  { key: "suctionLine", label: "Suction line temp", unit: "°F" },
+  { key: "liquidLine", label: "Liquid line temp", unit: "°F" },
+]
+
+export function readingsCount(readings: Readings): number {
+  return Object.values(readings).filter((v) => v.trim() !== "").length
+}
 
 export function isClosePath(value: string | null | undefined): value is ClosePath {
   return CLOSE_PATHS.some((path) => path.id === value)
@@ -126,8 +142,8 @@ export function closeGaps(input: CloseChecklistInput): string[] {
   if (!input.path) {
     gaps.push("Pick a path.")
   }
-  // Optional on a simple repair; required for parts, estimate and one-off.
-  if (input.note.trim() === "" && input.path !== "easy") {
+  // Optional on a simple repair or a part; required for estimate and one-off.
+  if (input.note.trim() === "" && input.path !== "easy" && input.path !== "parts") {
     gaps.push("Write a note.")
   }
   if (input.path === "easy" || input.path === "parts") {

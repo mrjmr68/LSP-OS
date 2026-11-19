@@ -48,6 +48,25 @@ export type PickerProperty = {
 export type PickerLink = {
   contactId: string
   propertyId: string
+  isPrimary?: boolean
+}
+
+/** The contact Quick Add fills in for a property: its primary link, any link, then anyone at the customer. */
+export function defaultContactFor(
+  propertyId: string,
+  contacts: readonly PickerContact[],
+  links: readonly PickerLink[],
+  properties: readonly PickerProperty[],
+): PickerContact | null {
+  const linked = links.filter((l) => l.propertyId === propertyId)
+  const pick =
+    linked.find((l) => l.isPrimary) ?? linked.find((l) => contacts.some((c) => c.id === l.contactId))
+  if (pick) {
+    const found = contacts.find((c) => c.id === pick.contactId)
+    if (found) return found
+  }
+  const customerId = properties.find((p) => p.id === propertyId)?.customerId
+  return contacts.find((c) => c.customerId === customerId) ?? null
 }
 
 export type BoardCrewMember = {

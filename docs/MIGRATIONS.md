@@ -23,6 +23,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261119160000_setup_people_no_anon.sql` | Removes signed-out access to `create_customer()` and the owner-guard trigger function. |
 | `20261119170000_multi_repair.sql` | Several repairs on one visit: `add_visit_bundle()` adds a repair and keeps earlier picks; `remove_visit_bundle()` takes one off (clears the parts path if no part-needing repair remains). Closing already invoices every repair. |
 | `20261119180000_optional_note.sql` | Same `close_visit()`; the note is optional on a simple repair and still required for parts, estimate and one-off. |
+| `20261119190000_parts_note_optional.sql` | Same `close_visit()`; the note is also optional on a parts close (model and serial are still required). Still required for estimate and one-off. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
