@@ -48,6 +48,7 @@ export default async function BoardPage({
       profileMissing={result.profileMissing}
       loadError={null}
       initialView={view}
+      review={result.review}
     />
   )
 }

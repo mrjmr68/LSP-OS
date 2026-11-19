@@ -24,6 +24,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261119170000_multi_repair.sql` | Several repairs on one visit: `add_visit_bundle()` adds a repair and keeps earlier picks; `remove_visit_bundle()` takes one off (clears the parts path if no part-needing repair remains). Closing already invoices every repair. |
 | `20261119180000_optional_note.sql` | Same `close_visit()`; the note is optional on a simple repair and still required for parts, estimate and one-off. |
 | `20261119190000_parts_note_optional.sql` | Same `close_visit()`; the note is also optional on a parts close (model and serial are still required). Still required for estimate and one-off. |
+| `20261120120000_owner_review.sql` | Stage 3 owner review: `invoice_cost_lines` (each repair's labor, parts, materials and profit from its price snapshot, built on every new invoice line and backfilled for open drafts); owner functions to remove / put back / edit cost lines, change wording, add or take off a line, ask the tech, and approve (numbers from `app_config.next_invoice_number`, bills the customer's billing contact, A3 moves the job to Invoiced); the tech answers with `answer_invoice_question`; `bundles.search_terms` ("no issue" finds SYS - MIN - None). |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
