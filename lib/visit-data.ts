@@ -27,6 +27,8 @@ export type VisitBundle = {
   quickSelectRank: number | null
   requiresModelSerial: boolean
   referencePart: string | null
+  /** Extra words the search matches, e.g. "no issue found". */
+  searchTerms?: string | null
 }
 
 export type VisitSupplier = {
@@ -207,7 +209,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
       supabase
         .from("bundles")
         .select(
-          "id, code, title, narrative, pricing_kind, target_price_cents, one_shot, quick_select_rank, requires_model_serial",
+          "id, code, title, narrative, pricing_kind, target_price_cents, one_shot, quick_select_rank, requires_model_serial, search_terms",
         )
         .eq("status", "active")
         .order("code"),
@@ -384,6 +386,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         quickSelectRank: bundle.quick_select_rank,
         requiresModelSerial: bundle.requires_model_serial,
         referencePart: referenceByBundle.get(bundle.id)?.join(", ") ?? null,
+        searchTerms: bundle.search_terms ?? null,
       })),
     suppliers: ((suppliersResult.data ?? []) as VisitSupplier[]).map((supplier) => ({
       id: supplier.id,
@@ -587,6 +590,7 @@ type BundleRow = {
   one_shot: boolean
   quick_select_rank: number | null
   requires_model_serial: boolean
+  search_terms?: string | null
 }
 
 type HistoryRow = {

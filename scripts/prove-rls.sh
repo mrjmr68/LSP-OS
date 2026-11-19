@@ -84,3 +84,7 @@ echo "Setup people proof passed."
 echo "Running multi-repair proof"
 run_sql "$root/supabase/tests/multi_repair_proof.sql"
 echo "Multi-repair proof passed."
+
+echo "Running owner review proof"
+run_sql "$root/supabase/tests/owner_review_proof.sql"
+echo "Owner review proof passed."

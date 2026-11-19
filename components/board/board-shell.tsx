@@ -22,6 +22,7 @@ import {
 import { usePositionReporter } from "@/components/board/use-position"
 import { FeedbackSheet } from "@/components/board/feedback-sheet"
 import { useVisitFlush } from "@/components/visit/visit-sync"
+import { QuestionCard } from "@/components/board/question-card"
 import { QuickAddSheet } from "@/components/board/quick-add"
 import { Sheet } from "@/components/board/sheet"
 import { Button } from "@/components/ui/button"
@@ -48,6 +49,7 @@ import {
   mapsDirectionsUrl,
   ownerStatusNeedsReason,
 } from "@/lib/board-rules"
+import type { BoardReview } from "@/lib/board-data"
 import type { FeedbackContextInput } from "@/lib/feedback"
 import {
   getQuickAddQueueServerSnapshot,
@@ -76,6 +78,7 @@ export function BoardShell({
   profileMissing,
   loadError,
   initialView,
+  review = { count: 0, draftByRequest: {}, questions: [] },
 }: {
   viewer: BoardViewer
   cards: BoardCard[]
@@ -84,6 +87,7 @@ export function BoardShell({
   profileMissing: boolean
   loadError: string | null
   initialView?: View
+  review?: BoardReview
 }) {
   const router = useRouter()
   const owner = viewer.role === "owner"
@@ -237,6 +241,11 @@ export function BoardShell({
       router.push(`/board/visit/${card.id}`)
       return
     }
+    const draft = owner ? review.draftByRequest[card.id] : undefined
+    if (draft && card.status === "complete") {
+      router.push(`/review/invoice/${draft}`)
+      return
+    }
     setPanelError(null)
     setDetailNote(null)
     setDirectionsUrl(null)
@@ -348,9 +357,14 @@ export function BoardShell({
             My jobs
           </TopTab>
           {owner ? (
-            <a href="/setup" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
-              Setup
-            </a>
+            <>
+              <a href="/review" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
+                Review{review.count ? ` · ${review.count}` : ""}
+              </a>
+              <a href="/setup" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
+                Setup
+              </a>
+            </>
           ) : null}
         </nav>
         <div className="ml-auto flex items-center gap-3">
@@ -394,6 +408,9 @@ export function BoardShell({
         {view === "mine" ? (
           <div className="mx-auto flex w-full max-w-md flex-col gap-3">
             {owner ? <div className="lg:hidden">{sync}</div> : null}
+            {review.questions.map((q) => (
+              <QuestionCard key={q.invoiceId} question={q} onAnswered={() => router.refresh()} />
+            ))}
             <MyJobsView
               jobs={mine}
               nowMs={nowMs}
@@ -449,6 +466,7 @@ export function BoardShell({
           </BottomTab>
         )}
         {canAdd ? <BottomTab onClick={() => setQuickAddOpen(true)}>Quick add</BottomTab> : null}
+        {owner ? <BottomTab href="/review">Review{review.count ? ` · ${review.count}` : ""}</BottomTab> : null}
         {owner ? <BottomTab href="/setup">Setup</BottomTab> : null}
       </nav>
 

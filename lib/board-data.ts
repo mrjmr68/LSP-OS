@@ -34,12 +34,32 @@ export type BoardLoad =
       catalog: BoardCatalog
       catalogError: string | null
       profileMissing: boolean
+      review: BoardReview
     }
   | {
       ok: false
       viewer: BoardViewer
       message: string
     }
+
+/** Owner review counts and the tech's open questions. */
+export type BoardReview = {
+  /** Draft invoices and estimates waiting on an owner (owners only). */
+  count: number
+  /** Request id → its draft invoice, so an owner's tap on a Complete card opens the review. */
+  draftByRequest: Record<string, string>
+  /** Questions an owner asked this viewer about their drafts. */
+  questions: TechQuestion[]
+}
+
+export type TechQuestion = {
+  invoiceId: string
+  title: string
+  question: string
+  askedBy: string
+}
+
+const emptyReview: BoardReview = { count: 0, draftByRequest: {}, questions: [] }
 
 type ProfileRow = {
   id: string
@@ -206,6 +226,7 @@ export async function loadBoard(): Promise<BoardLoad> {
       catalog: emptyCatalog,
       catalogError: null,
       profileMissing: false,
+      review: emptyReview,
     }
   }
 
@@ -374,6 +395,56 @@ export async function loadBoard(): Promise<BoardLoad> {
     catalog: viewer.role === "owner" ? catalogResult.catalog : { ...catalogResult.catalog, crew: [] },
     catalogError: catalogResult.error,
     profileMissing: !typedProfile?.active,
+    review: await loadBoardReview(supabase, viewer, requestRows),
+  }
+}
+
+async function loadBoardReview(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  viewer: BoardViewer,
+  requestRows: RequestRow[],
+): Promise<BoardReview> {
+  if (!viewer.profileId) return emptyReview
+  const owner = viewer.role === "owner"
+  const [invoices, estimates] = await Promise.all([
+    supabase
+      .from("invoice_records")
+      .select("id, request_id, status, flag_question, flag_asked_by, property_snap, unit_snap")
+      .in("status", owner ? ["draft", "in_review", "flagged"] : ["flagged"]),
+    owner
+      ? supabase.from("estimates").select("id", { count: "exact", head: true }).in("status", ["draft", "in_review"])
+      : Promise.resolve({ count: 0 }),
+  ])
+  type Row = {
+    id: string
+    request_id: string
+    status: string
+    flag_question: string | null
+    flag_asked_by: string | null
+    property_snap: string
+    unit_snap: string
+  }
+  const rows = (invoices.data ?? []) as Row[]
+  const mine = new Set(requestRows.filter((r) => r.assigned_user_id === viewer.profileId).map((r) => r.id))
+  const askers = new Map<string, string>()
+  const askerIds = [...new Set(rows.map((r) => r.flag_asked_by).filter((v): v is string => Boolean(v)))]
+  if (askerIds.length) {
+    const { data } = await supabase.from("profiles").select("id, full_name").in("id", askerIds)
+    for (const p of (data ?? []) as { id: string; full_name: string }[]) {
+      askers.set(p.id, p.full_name.split(" ")[0] ?? p.full_name)
+    }
+  }
+  return {
+    count: owner ? rows.length + (estimates.count ?? 0) : 0,
+    draftByRequest: owner ? Object.fromEntries(rows.map((r) => [r.request_id, r.id])) : {},
+    questions: rows
+      .filter((r) => r.status === "flagged" && r.flag_question && mine.has(r.request_id))
+      .map((r) => ({
+        invoiceId: r.id,
+        title: `${r.property_snap} ${r.unit_snap}`,
+        question: r.flag_question ?? "",
+        askedBy: (r.flag_asked_by && askers.get(r.flag_asked_by)) || "An owner",
+      })),
   }
 }
 

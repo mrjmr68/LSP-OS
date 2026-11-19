@@ -782,7 +782,9 @@ function VisitSession({
   const needle = query.trim().toLowerCase()
   const results = needle
     ? bundles.filter((bundle) =>
-        `${bundle.code} ${bundle.title} ${bundle.narrative}`.toLowerCase().includes(needle),
+        `${bundle.code} ${bundle.title} ${bundle.narrative} ${bundle.searchTerms ?? ""}`
+          .toLowerCase()
+          .includes(needle),
       )
     : quick
   const total = picks.reduce((sum, p) => sum + p.priceCents, 0)
