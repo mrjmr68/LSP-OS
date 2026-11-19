@@ -9,8 +9,13 @@ export const metadata: Metadata = {
   title: "Board",
 }
 
-export default async function BoardPage() {
-  const result = await loadBoard()
+export default async function BoardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>
+}) {
+  const [result, params] = await Promise.all([loadBoard(), searchParams])
+  const view = params.view === "mine" ? "mine" : params.view === "board" ? "board" : undefined
 
   if (!result.ok && result.message === "Sign in again to load the board.") {
     redirect("/login")
@@ -25,6 +30,7 @@ export default async function BoardPage() {
         catalogError={null}
         profileMissing={false}
         loadError={result.message}
+        initialView={view}
       />
     )
   }
@@ -41,6 +47,7 @@ export default async function BoardPage() {
       catalogError={result.catalogError}
       profileMissing={result.profileMissing}
       loadError={null}
+      initialView={view}
     />
   )
 }

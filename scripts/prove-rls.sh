@@ -80,3 +80,7 @@ echo "SMS consent proof passed."
 echo "Running Setup people proof"
 run_sql "$root/supabase/tests/setup_people_proof.sql"
 echo "Setup people proof passed."
+
+echo "Running multi-repair proof"
+run_sql "$root/supabase/tests/multi_repair_proof.sql"
+echo "Multi-repair proof passed."

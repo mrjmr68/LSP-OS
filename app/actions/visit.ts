@@ -101,6 +101,47 @@ export async function selectVisitBundle(input: {
   return finish(input.requestId, data, error)
 }
 
+/** Add one more repair to the visit; earlier picks stay. */
+export async function addVisitBundle(input: {
+  requestId: string
+  bundleId: string
+  seenAt: string | null
+}): Promise<ActionResult<VisitStep>> {
+  const ready = await readyClient()
+  if (!ready.ok) {
+    return ready
+  }
+  if (!uuidPattern.test(input.requestId) || !uuidPattern.test(input.bundleId)) {
+    return { ok: false, message: "Pick a repair again." }
+  }
+  const { data, error } = await ready.supabase.rpc("add_visit_bundle", {
+    request_id: input.requestId,
+    bundle_id: input.bundleId,
+    seen_at: input.seenAt,
+  })
+  return finish(input.requestId, data, error)
+}
+
+export async function removeVisitBundle(input: {
+  requestId: string
+  selectionId: string
+  seenAt: string | null
+}): Promise<ActionResult<VisitStep>> {
+  const ready = await readyClient()
+  if (!ready.ok) {
+    return ready
+  }
+  if (!uuidPattern.test(input.requestId) || !uuidPattern.test(input.selectionId)) {
+    return { ok: false, message: "Open the visit again." }
+  }
+  const { data, error } = await ready.supabase.rpc("remove_visit_bundle", {
+    request_id: input.requestId,
+    selection_id: input.selectionId,
+    seen_at: input.seenAt,
+  })
+  return finish(input.requestId, data, error)
+}
+
 export async function savePartsOrder(input: {
   requestId: string
   description: string
