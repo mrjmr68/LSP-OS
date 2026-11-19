@@ -17,6 +17,7 @@ Apply the files in `supabase/migrations` in filename order. Each file runs once.
 | `20261104020000_owner_on_the_way.sql` | On the way works for an owner assigned to the call. The status switch still needs a reason for that jump. |
 | `20261104120000_active_visit.sql` | Arrival, job start, guided close, parts, and attempt. Easy and one-off close draft an invoice and move the call to Complete. |
 | `20261119120000_v1_foundation.sql` | NC county sales tax table (100 counties, NCDOR rates effective 2026-07-01) and a county on each property that sets its tax rate; latest tech position for the Board crew strip; a tech's own My Jobs order. |
+| `20261119140000_sms_consent.sql` | SMS consent records for the Twilio A2P campaign. Signed-out people record consent through `record_sms_consent()` (the `/text-updates` page); only owners can read the records. Each row keeps the exact wording agreed to. |
 
 Money is integer cents. Times are `timestamptz` (UTC). The app shows America/New_York.
 
@@ -74,6 +75,12 @@ Phone starts as `unset` when the auth user has no phone in metadata. Fill the re
 - A tech can read county rates but cannot change one; an owner can.
 - A tech writes only their own position and sees only their own; owners see all.
 - A tech can order their own My Jobs and cannot order a job assigned to someone else.
+
+`supabase/tests/sms_consent_proof.sql`
+
+- A signed-out visitor can record consent through the function but cannot read or insert rows directly.
+- A badly formatted phone number is rejected.
+- A tech cannot read consent records; an owner can.
 
 ## Rules encoded for later milestones
 

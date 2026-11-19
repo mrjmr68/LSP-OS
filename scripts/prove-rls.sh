@@ -72,3 +72,7 @@ echo "Visit proof passed."
 echo "Running v1 foundation proof"
 run_sql "$root/supabase/tests/v1_foundation_proof.sql"
 echo "v1 foundation proof passed."
+
+echo "Running SMS consent proof"
+run_sql "$root/supabase/tests/sms_consent_proof.sql"
+echo "SMS consent proof passed."
