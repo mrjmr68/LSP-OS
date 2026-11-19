@@ -54,6 +54,10 @@ export type BoardCrewMember = {
   id: string
   fullName: string
   role: "owner" | "tech"
+  /** Last reported position, if the app has one from the last few hours. */
+  lastLat?: number | null
+  lastLng?: number | null
+  lastSeenMs?: number | null
 }
 
 export type BoardCatalog = {

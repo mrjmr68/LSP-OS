@@ -7,15 +7,24 @@ import {
   assignRequest,
   createQuickAdd,
   goEnRoute,
+  reorderMyJobs,
   setBoardStatus,
   setRequestPriority,
   softDeleteRequest,
 } from "@/app/actions/board"
+import {
+  AssignPicker,
+  CrewStrip,
+  DeskBoard,
+  MyJobsView,
+  PhoneBoard,
+  Segmented,
+} from "@/components/board/board-v1"
+import { usePositionReporter } from "@/components/board/use-position"
 import { FeedbackSheet } from "@/components/board/feedback-sheet"
 import { useVisitFlush } from "@/components/visit/visit-sync"
 import { QuickAddSheet } from "@/components/board/quick-add"
 import { Sheet } from "@/components/board/sheet"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -28,7 +37,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import {
   BOARD_CATEGORIES,
-  groupBoardByStage,
   type BoardCard,
   type BoardStatus,
   type BoardViewer,
@@ -36,14 +44,8 @@ import {
   sourceLabel,
   statusLabel,
 } from "@/lib/board"
+import { crewStates, groupByDisplayStage, myJobs } from "@/lib/board-v1"
 import {
-  getBoardStageViewServerSnapshot,
-  readBoardStageView,
-  subscribeBoardStageView,
-  writeBoardStageView,
-} from "@/lib/board-stage"
-import {
-  crewStandpoint,
   mapsDirectionsUrl,
   ownerStatusNeedsReason,
   runGoEnRoute,
@@ -63,8 +65,7 @@ import {
   subscribeVisitQueue,
 } from "@/lib/visit"
 
-type Filter = "all" | "mine"
-type Standpoint = "board" | "where"
+type View = "board" | "mine"
 type EnRoutePhase = "location" | "save"
 type Panel =
   | { kind: "enroute" | "detail" | "repeat" | "status" | "assign" | "delete"; card: BoardCard }
@@ -86,13 +87,9 @@ export function BoardShell({
   loadError: string | null
 }) {
   const router = useRouter()
-  const [filter, setFilter] = useState<Filter>("all")
-  const [standpoint, setStandpoint] = useState<Standpoint>("board")
-  const stageView = useSyncExternalStore(
-    subscribeBoardStageView,
-    readBoardStageView,
-    getBoardStageViewServerSnapshot,
-  )
+  const owner = viewer.role === "owner"
+  // Techs land on My Jobs; owners on the Board.
+  const [view, setView] = useState<View>(owner ? "board" : "mine")
   const queue = useSyncExternalStore(
     subscribeQuickAddQueue,
     readQuickAddQueue,
@@ -105,6 +102,7 @@ export function BoardShell({
   )
   useVisitFlush(() => router.refresh())
   const offline = useSyncExternalStore(subscribeOffline, getOfflineSnapshot, getOnlineServerSnapshot)
+  usePositionReporter(viewer.mode === "authenticated" && Boolean(viewer.profileId) && !offline)
   const [flushToken, setFlushToken] = useState(0)
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
@@ -121,8 +119,19 @@ export function BoardShell({
   const [directionsUrl, setDirectionsUrl] = useState<string | null>(null)
   const [enRoutePhase, setEnRoutePhase] = useState<EnRoutePhase | null>(null)
   const [busy, setBusy] = useState(false)
+  const [reordering, setReordering] = useState(false)
+  // A reorder shows at once; it's dropped as soon as fresh cards arrive from the server.
+  const [optimistic, setOptimistic] = useState<{ base: BoardCard[]; ids: string[] } | null>(null)
+  const optimisticOrder = optimistic && optimistic.base === cards ? optimistic.ids : null
   const revealCall = useRef<{ id: string; until: number } | null>(null)
   const [revealNonce, setRevealNonce] = useState(0)
+  const [nowMs, setNowMs] = useState(() => Date.now())
+
+  // Minutes on site / driving tick along.
+  useEffect(() => {
+    const t = window.setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => window.clearInterval(t)
+  }, [])
 
   useEffect(() => {
     if (offline || viewer.mode !== "authenticated") {
@@ -159,24 +168,20 @@ export function BoardShell({
     }
   }, [flushToken, offline, router, viewer.mode])
 
-  const visibleCards = [...queue.map(pendingCard), ...cards].filter((card) =>
-    filter === "all" ? true : card.assignedUserId === viewer.profileId,
-  )
-  const owner = viewer.role === "owner"
-  const showWhere = owner && standpoint === "where"
-  const stageGroups = groupBoardByStage(visibleCards, stageView)
-  const openCount = stageGroups.reduce((total, group) => total + group.cards.length, 0)
-  const whereRows = showWhere ? crewStandpoint(catalog.crew, cards) : []
-  const whereBusy = whereRows.filter((row) => row.jobs.length > 0).length
-  const summary = showWhere
-    ? whereRows.length === 0
-      ? "No active crew."
-      : `${whereBusy} on a call · ${whereRows.length - whereBusy} free`
-    : openCount === 0
-      ? filter === "mine"
-        ? "Nothing assigned to you — check with an owner."
-        : "No open calls."
-      : `${openCount} open ${openCount === 1 ? "call" : "calls"}`
+  const allCards = [...queue.map(pendingCard), ...cards]
+  const groups = groupByDisplayStage(allCards)
+  const crew = owner ? crewStates(catalog.crew, cards) : []
+  const mine = (() => {
+    const list = myJobs(cards, viewer.profileId)
+    if (!optimisticOrder) return list
+    const rank = new Map(optimisticOrder.map((id, index) => [id, index]))
+    return [...list].sort((a, b) => {
+      if (a.status === "in_progress" || b.status === "in_progress") {
+        return Number(b.status === "in_progress") - Number(a.status === "in_progress")
+      }
+      return (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999)
+    })
+  })()
   const canAdd =
     !profileMissing &&
     !loadError &&
@@ -187,7 +192,7 @@ export function BoardShell({
     const card = panel && !panel.card.pendingSync ? panel.card : null
     setFeedbackContext({
       path: window.location.pathname || "/board",
-      filter,
+      filter: view === "mine" ? "mine" : "all",
       requestId: card?.id ?? null,
       displayNumber: card?.displayNumber ?? null,
     })
@@ -199,14 +204,13 @@ export function BoardShell({
   }
 
   function showSavedCall(id: string) {
-    setStandpoint("board")
     revealCall.current = { id, until: Date.now() + 1500 }
     setRevealNonce((current) => current + 1)
   }
 
   useEffect(() => {
     const target = revealCall.current
-    if (!target || standpoint === "where" || Date.now() > target.until) {
+    if (!target || Date.now() > target.until) {
       return
     }
     const scroll = () => {
@@ -215,30 +219,79 @@ export function BoardShell({
     scroll()
     const followUp = window.setTimeout(scroll, 400)
     return () => window.clearTimeout(followUp)
-  }, [revealNonce, standpoint, cards, queue])
+  }, [revealNonce, cards, queue])
 
-  function openCard(card: BoardCard) {
+  function openCard(card: BoardCard, fromMyJobs = false) {
     if (card.pendingSync) {
       return
     }
-    const mine =
+    const isMine =
       viewer.profileId !== null && card.assignedUserId === viewer.profileId
-    if (mine && card.status === "in_progress") {
+    if (isMine && card.status === "in_progress") {
       router.push(`/board/visit/${card.id}`)
       return
     }
-    if (card.status === "parts" && (mine || viewer.role === "owner")) {
+    if (card.status === "parts" && (isMine || owner)) {
       router.push(`/board/visit/${card.id}`)
       return
     }
     const mineStart =
-      filter === "mine" &&
-      mine &&
+      (fromMyJobs || view === "mine") &&
+      isMine &&
       (card.status === "assigned" || card.status === "ready")
     setPanelError(null)
     setDetailNote(null)
     setDirectionsUrl(null)
     setPanel({ kind: mineStart ? "enroute" : "detail", card })
+  }
+
+  function openAssign(card: BoardCard) {
+    setPanelError(null)
+    setPanel({ kind: "assign", card })
+  }
+
+  function saveOrder(ids: string[]) {
+    setOptimistic({ base: cards, ids })
+    setReordering(true)
+    void reorderMyJobs(ids).then((result) => {
+      setReordering(false)
+      if (!result.ok) {
+        setOptimistic(null)
+        setNotice(result.message)
+        return
+      }
+      router.refresh()
+    })
+  }
+
+  function finishAssign(
+    card: BoardCard,
+    result: Awaited<ReturnType<typeof assignRequest>>,
+    message: string,
+  ) {
+    setBusy(false)
+    if (!result.ok) {
+      setPanelError(result.message)
+      return
+    }
+    setNotice(message)
+    setPanel(null)
+    router.refresh()
+  }
+
+  function setHigh(card: BoardCard, priority: "high" | "normal") {
+    setBusy(true)
+    setPanelError(null)
+    void setRequestPriority({ requestId: card.id, priority }).then((result) => {
+      setBusy(false)
+      if (!result.ok) {
+        setPanelError(result.message)
+        return
+      }
+      setNotice(priority === "high" ? "Marked High. Nothing was sent." : "High cleared.")
+      setPanel(null)
+      router.refresh()
+    })
   }
 
   async function confirmEnRoute(card: BoardCard) {
@@ -285,177 +338,169 @@ export function BoardShell({
     }
   }
 
+  const notices = (
+    <>
+      {viewer.mode === "preview" ? (
+        <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6">
+          Supabase is not connected, so this is the empty Board. Sign-in starts after the
+          project URL and anon key are in <span className="font-medium">.env.local</span>.
+        </p>
+      ) : null}
+      {profileMissing ? (
+        <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6">
+          This login is not on the crew list yet. An owner adds you in Setup → Team.
+        </p>
+      ) : null}
+      {loadError ? (
+        <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive">
+          {loadError}
+        </p>
+      ) : null}
+      {catalogError ? (
+        <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive">
+          {catalogError}
+        </p>
+      ) : null}
+      {notice ? (
+        <p role="status" className="flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} className="shrink-0 text-muted-foreground underline">
+            OK
+          </button>
+        </p>
+      ) : null}
+    </>
+  )
+
+  const sync = (
+    <SyncPill
+      mode={viewer.mode}
+      hasError={Boolean(loadError)}
+      offline={offline}
+      pending={queue.length + visitQueue.length}
+    />
+  )
+
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-        <div className="flex items-center gap-3 px-4 py-3">
-          <div className="min-w-0">
-            <p className="font-display text-2xl leading-none font-bold tracking-wide text-foreground">
-              LSP
-            </p>
-            <p className="text-xs text-muted-foreground">Legend Service Pros</p>
-          </div>
-          <p className="hidden text-sm font-medium text-muted-foreground sm:block">Board</p>
-          <div className="ml-auto flex items-center gap-2">
-            <SyncPill
-              mode={viewer.mode}
-              hasError={Boolean(loadError)}
-              offline={offline}
-              pending={queue.length + visitQueue.length}
-            />
-            <AccountMenu viewer={viewer} onReport={openFeedback} />
-          </div>
+      {/* Desktop: dark bar across the top */}
+      <header className="sticky top-0 z-20 hidden items-center gap-2 bg-ink px-7 py-3.5 text-ink-foreground lg:flex">
+        <p className="mr-4 text-xl font-extrabold">LSP</p>
+        <nav aria-label="Main" className="flex items-center gap-1">
+          <TopTab active={view === "board"} onClick={() => setView("board")}>
+            Board
+          </TopTab>
+          <TopTab active={view === "mine"} onClick={() => setView("mine")}>
+            My jobs
+          </TopTab>
+          {owner ? (
+            <a href="/setup" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
+              Setup
+            </a>
+          ) : null}
+        </nav>
+        <div className="ml-auto flex items-center gap-3">
+          {sync}
+          {canAdd ? (
+            <button
+              type="button"
+              onClick={() => setQuickAddOpen(true)}
+              className="h-11 rounded-[10px] bg-primary px-4 text-[17px] font-bold text-primary-foreground"
+            >
+              Quick add
+            </button>
+          ) : null}
+          <AccountMenu viewer={viewer} onReport={openFeedback} />
         </div>
       </header>
 
-      <main className="flex flex-1 flex-col gap-4 px-4 py-4 pb-28">
-        {viewer.mode === "preview" ? (
-          <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
-            Supabase is not connected, so this is the empty Board. Sign-in starts after the
-            project URL and anon key are in <span className="font-medium">.env.local</span>.
-          </p>
-        ) : null}
-        {profileMissing ? (
-          <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
-            This login is not on the crew list yet. Adding the user in Supabase should create a
-            profile. An owner sets the role to owner or tech.
-          </p>
-        ) : null}
-        {loadError ? (
-          <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive">
-            {loadError}
-          </p>
-        ) : null}
-        {catalogError ? (
-          <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive">
-            {catalogError}
-          </p>
-        ) : null}
-        {notice ? (
-          <p role="status" className="rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
-            {notice}
-          </p>
-        ) : null}
-
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-            <div role="group" aria-label="Board filter" className="grid grid-cols-2 gap-2 sm:flex">
-              <Button
-                type="button"
-                size="field"
-                variant={filter === "all" ? "default" : "outline"}
-                aria-pressed={filter === "all"}
-                onClick={() => setFilter("all")}
-              >
-                All jobs
-              </Button>
-              <Button
-                type="button"
-                size="field"
-                variant={filter === "mine" ? "default" : "outline"}
-                aria-pressed={filter === "mine"}
-                onClick={() => setFilter("mine")}
-              >
-                My jobs
-              </Button>
-            </div>
-            {owner ? (
-              <div role="group" aria-label="Board view" className="grid grid-cols-2 gap-2 sm:flex">
-                <Button
-                  type="button"
-                  size="field"
-                  variant={standpoint === "board" ? "default" : "outline"}
-                  aria-pressed={standpoint === "board"}
-                  onClick={() => setStandpoint("board")}
-                >
-                  Board
-                </Button>
-                <Button
-                  type="button"
-                  size="field"
-                  variant={standpoint === "where" ? "default" : "outline"}
-                  aria-pressed={standpoint === "where"}
-                  onClick={() => setStandpoint("where")}
-                >
-                  Who&apos;s where
-                </Button>
-              </div>
-            ) : null}
-            {showWhere ? null : (
-              <div role="group" aria-label="Stages" className="grid grid-cols-2 gap-2 sm:flex">
-                <Button
-                  type="button"
-                  size="field"
-                  variant={stageView === "live" ? "default" : "outline"}
-                  aria-pressed={stageView === "live"}
-                  onClick={() => writeBoardStageView("live")}
-                >
-                  Live stages
-                </Button>
-                <Button
-                  type="button"
-                  size="field"
-                  variant={stageView === "all" ? "default" : "outline"}
-                  aria-pressed={stageView === "all"}
-                  onClick={() => writeBoardStageView("all")}
-                >
-                  All stages
-                </Button>
-              </div>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground">{summary}</p>
+      {/* Phone: big title, the view switch, the account menu */}
+      <header className="flex items-center justify-between gap-2 px-5 pt-5 pb-2 lg:hidden">
+        <h1 className="text-[30px] leading-none font-extrabold">{view === "mine" ? "My jobs" : "Board"}</h1>
+        <div className="flex items-center gap-2">
+          {owner ? (
+            <Segmented
+              label="Show"
+              value={view}
+              onChange={setView}
+              options={[
+                { id: "board", label: "All jobs" },
+                { id: "mine", label: "My jobs" },
+              ]}
+            />
+          ) : (
+            sync
+          )}
+          <AccountMenu viewer={viewer} onReport={openFeedback} />
         </div>
+      </header>
 
-        {showWhere ? (
-          <WhosWhere
-            rows={whereRows}
-            viewer={viewer}
-            onOpen={openCard}
-            onRepeat={(card) => setPanel({ kind: "repeat", card })}
-            onStatus={(card) => {
-              setPanelError(null)
-              setPanel({ kind: "status", card })
-            }}
-            onMore={(card) => {
-              setPanelError(null)
-              setPanel({ kind: "assign", card })
-            }}
-          />
-        ) : (
-          <div className="flex flex-col gap-3">
-            {stageGroups.map((group) => (
-              <CategoryColumn
-                key={group.status}
-                category={group}
-                cards={group.cards}
-                viewer={viewer}
-                onOpen={openCard}
-                onRepeat={(card) => setPanel({ kind: "repeat", card })}
-                onStatus={(card) => {
-                  setPanelError(null)
-                  setPanel({ kind: "status", card })
-                }}
-                onMore={(card) => {
-                  setPanelError(null)
-                  setPanel({ kind: "assign", card })
-                }}
-              />
-            ))}
+      <main className="flex flex-1 flex-col gap-3 px-5 pt-1 pb-28 lg:px-7 lg:pt-4 lg:pb-8">
+        {notices}
+        {view === "mine" ? (
+          <div className="mx-auto flex w-full max-w-md flex-col gap-3">
+            {owner ? <div className="lg:hidden">{sync}</div> : null}
+            <MyJobsView
+              jobs={mine}
+              nowMs={nowMs}
+              saving={reordering}
+              onOpenJob={(card) => openCard(card, true)}
+              onReorder={saveOrder}
+            />
           </div>
+        ) : (
+          <>
+            {owner ? (
+              <>
+                <div className="lg:hidden">
+                  <CrewStrip crew={crew} wide={false} />
+                </div>
+                <div className="hidden lg:block">
+                  <CrewStrip crew={crew} wide />
+                </div>
+              </>
+            ) : null}
+            <div className="lg:hidden">
+              <PhoneBoard
+                groups={groups}
+                all={allCards}
+                nowMs={nowMs}
+                canAssign={owner}
+                onOpen={(card) => openCard(card)}
+                onAssign={openAssign}
+              />
+            </div>
+            <div className="hidden lg:block">
+              <DeskBoard
+                groups={groups}
+                all={allCards}
+                nowMs={nowMs}
+                canAssign={owner}
+                onOpen={(card) => openCard(card)}
+                onAssign={openAssign}
+              />
+            </div>
+          </>
         )}
       </main>
 
-      {canAdd ? (
-        <Button
-          type="button"
-          size="field"
-          className="fixed right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 min-h-14 shadow-lg"
-          onClick={() => setQuickAddOpen(true)}
-        >
-          + Quick Add
-        </Button>
-      ) : null}
+      {/* Phone: bottom bar */}
+      <nav
+        aria-label="Main"
+        className="fixed inset-x-0 bottom-0 z-30 flex gap-2 border-t border-border bg-card px-3 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
+      >
+        {owner ? (
+          <BottomTab active={view === "board"} onClick={() => setView("board")}>
+            Board
+          </BottomTab>
+        ) : (
+          <BottomTab onClick={() => setView(view === "mine" ? "board" : "mine")}>
+            {view === "mine" ? "Board" : "My jobs"}
+          </BottomTab>
+        )}
+        {canAdd ? <BottomTab onClick={() => setQuickAddOpen(true)}>Quick add</BottomTab> : null}
+        {owner ? <BottomTab href="/setup">Setup</BottomTab> : null}
+      </nav>
 
       <QuickAddSheet
         open={quickAddOpen}
@@ -556,50 +601,43 @@ export function BoardShell({
           })
         }}
       />
-      <AssignSheet
+      <AssignPicker
         card={visiblePanel?.kind === "assign" ? visiblePanel.card : null}
-        crew={catalog.crew}
+        crew={crew}
         busy={busy}
         error={panelError}
         onClose={() => setPanel(null)}
-        onSave={(card, techId) => {
+        onPick={(card, person) => {
           setBusy(true)
           setPanelError(null)
-          void assignRequest({ requestId: card.id, techId }).then((result) => {
-            setBusy(false)
-            if (!result.ok) {
-              setPanelError(result.message)
-              return
-            }
-            if (techId) {
-              setNotice(`${card.displayNumber} assigned.`)
-            } else {
-              const landed = result.data.status ? statusLabel(result.data.status) : null
-              setNotice(
-                landed
-                  ? `${card.displayNumber} unassigned → ${landed}.`
-                  : `${card.displayNumber} unassigned.`,
-              )
-            }
-            setPanel(null)
-            router.refresh()
-          })
+          void assignRequest({
+            requestId: card.id,
+            techId: person.id,
+            asNext: person.state !== "free",
+          }).then((result) =>
+            finishAssign(
+              card,
+              result,
+              person.state === "free"
+                ? `${person.name} has ${card.propertyName} ${card.unitLabel}.`
+                : `${card.propertyName} ${card.unitLabel} is ${person.name}'s next job.`,
+            ),
+          )
         }}
-        onDelete={(card) => setPanel({ kind: "delete", card })}
-        onHigh={(card) => {
-          const priority = card.priority === "high" ? "normal" : "high"
+        onUnassign={(card) => {
           setBusy(true)
-          void setRequestPriority({ requestId: card.id, priority }).then((result) => {
-            setBusy(false)
-            if (!result.ok) {
-              setPanelError(result.message)
-              return
-            }
-            setNotice(priority === "high" ? "Marked High. Nothing was sent." : "High cleared.")
-            setPanel(null)
-            router.refresh()
+          setPanelError(null)
+          void assignRequest({ requestId: card.id, techId: null }).then((result) => {
+            const landed = result.ok && result.data.status ? statusLabel(result.data.status) : null
+            finishAssign(
+              card,
+              result,
+              landed ? `${card.displayNumber} unassigned → ${landed}.` : `${card.displayNumber} unassigned.`,
+            )
           })
         }}
+        onHigh={(card) => setHigh(card, card.priority === "high" ? "normal" : "high")}
+        onDelete={(card) => setPanel({ kind: "delete", card })}
       />
       <DeleteSheet
         card={visiblePanel?.kind === "delete" ? visiblePanel.card : null}
@@ -622,6 +660,59 @@ export function BoardShell({
         }}
       />
     </div>
+  )
+}
+
+
+function TopTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-current={active ? "page" : undefined}
+      onClick={onClick}
+      className={
+        "rounded-[10px] px-4 py-2.5 text-[17px] font-bold " +
+        (active ? "bg-card text-foreground" : "text-ink-foreground/85 hover:text-ink-foreground")
+      }
+    >
+      {children}
+    </button>
+  )
+}
+
+function BottomTab({
+  active = false,
+  href,
+  onClick,
+  children,
+}: {
+  active?: boolean
+  href?: string
+  onClick?: () => void
+  children: React.ReactNode
+}) {
+  const cls =
+    "flex h-14 flex-1 items-center justify-center rounded-xl text-[17px] font-bold " +
+    (active ? "bg-ink text-ink-foreground" : "border-2 border-ink bg-card")
+  if (href) {
+    return (
+      <a href={href} className={cls}>
+        {children}
+      </a>
+    )
+  }
+  return (
+    <button type="button" aria-current={active ? "page" : undefined} onClick={onClick} className={cls}>
+      {children}
+    </button>
   )
 }
 
@@ -667,6 +758,10 @@ function pendingCard(item: PendingQuickAdd): BoardCard {
     createdAtMs: Date.parse(item.createdAt),
     repeatCalls: [],
     pendingSync: true,
+    myJobsPosition: null,
+    propertyLat: null,
+    propertyLng: null,
+    fieldState: null,
   }
 }
 
@@ -702,225 +797,6 @@ function openMapsTab(url: string): boolean {
   } catch {
     return false
   }
-}
-
-function CategoryColumn({
-  category,
-  cards,
-  viewer,
-  onOpen,
-  onRepeat,
-  onStatus,
-  onMore,
-}: {
-  category: { status: BoardStatus; label: string; hint: string }
-  cards: BoardCard[]
-  viewer: BoardViewer
-  onOpen: (card: BoardCard) => void
-  onRepeat: (card: BoardCard) => void
-  onStatus: (card: BoardCard) => void
-  onMore: (card: BoardCard) => void
-}) {
-  if (cards.length === 0) {
-    return (
-      <section
-        id={`board-stage-${category.status}`}
-        aria-label={category.label}
-        className="flex min-h-12 scroll-mt-24 items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/50 px-3 py-2"
-      >
-        <h2 className="text-sm font-medium text-muted-foreground">{category.label}</h2>
-        <p className="text-sm tabular-nums text-muted-foreground">0</p>
-      </section>
-    )
-  }
-
-  return (
-    <section
-      id={`board-stage-${category.status}`}
-      aria-label={category.label}
-      className="scroll-mt-24 rounded-xl border border-border bg-card"
-    >
-      <header className="border-b border-border">
-        <div className="flex min-h-12 items-center justify-between gap-3 px-3 py-2">
-          <div>
-            <h2 className="font-display text-xl leading-none font-semibold tracking-wide uppercase">
-              {category.label}
-            </h2>
-            <p className="mt-1 text-xs text-muted-foreground">{category.hint}</p>
-          </div>
-          <p className="font-display text-3xl leading-none tabular-nums">{cards.length}</p>
-        </div>
-      </header>
-      <div className="flex flex-col gap-2 p-2">
-        {cards.map((card) => (
-          <CallCard
-            key={card.id}
-            card={card}
-            viewer={viewer}
-            onOpen={onOpen}
-            onRepeat={onRepeat}
-            onStatus={onStatus}
-            onMore={onMore}
-          />
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function WhosWhere({
-  rows,
-  viewer,
-  onOpen,
-  onRepeat,
-  onStatus,
-  onMore,
-}: {
-  rows: ReturnType<typeof crewStandpoint>
-  viewer: BoardViewer
-  onOpen: (card: BoardCard) => void
-  onRepeat: (card: BoardCard) => void
-  onStatus: (card: BoardCard) => void
-  onMore: (card: BoardCard) => void
-}) {
-  if (rows.length === 0) {
-    return (
-      <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm leading-6">
-        No active crew.
-      </p>
-    )
-  }
-
-  return (
-    <div className="flex flex-col gap-2" aria-label="Who's where">
-      {rows.map((row) => (
-        <section key={row.id} aria-label={row.fullName} className="rounded-xl border border-border bg-card px-3 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="font-display text-lg leading-none font-semibold tracking-wide">
-              {row.fullName}
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              {row.role === "owner" ? "Owner" : "Tech"}
-            </p>
-          </div>
-          {row.jobs.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">Free</p>
-          ) : (
-            <div className="mt-2 flex flex-col gap-2">
-              {row.jobs.map((card) => (
-                <CallCard
-                  key={card.id}
-                  card={card}
-                  compact
-                  viewer={viewer}
-                  onOpen={onOpen}
-                  onRepeat={onRepeat}
-                  onStatus={onStatus}
-                  onMore={onMore}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      ))}
-    </div>
-  )
-}
-
-function CallCard({
-  card,
-  compact = false,
-  viewer,
-  onOpen,
-  onRepeat,
-  onStatus,
-  onMore,
-}: {
-  card: BoardCard
-  compact?: boolean
-  viewer: BoardViewer
-  onOpen: (card: BoardCard) => void
-  onRepeat: (card: BoardCard) => void
-  onStatus: (card: BoardCard) => void
-  onMore: (card: BoardCard) => void
-}) {
-  const high = card.priority === "high"
-  const repeat = card.repeatCalls.length > 0
-  const owner = viewer.role === "owner"
-  const pad = compact ? "px-3 py-2" : "px-3 py-3"
-  return (
-    <article
-      id={boardCardElementId(card.id)}
-      className={
-        high
-          ? `rounded-lg border border-high/50 bg-high/15 ${pad}`
-          : repeat
-            ? `rounded-lg border border-amber-700/40 bg-amber-50 ${pad}`
-            : `rounded-lg border border-border bg-background ${pad}`
-      }
-      onContextMenu={(event) => {
-        if (!owner || card.pendingSync) {
-          return
-        }
-        event.preventDefault()
-        onMore(card)
-      }}
-    >
-      <button type="button" className="w-full text-left" onClick={() => onOpen(card)}>
-        <div className="flex items-start justify-between gap-2">
-          <p className={compact ? "font-display text-base leading-none tracking-wide" : "font-display text-lg leading-none tracking-wide"}>
-            {card.displayNumber}
-          </p>
-          <span className="inline-flex items-center gap-2">
-            {card.pendingSync ? (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                <span aria-hidden className="size-2.5 rounded-full bg-amber-500" />
-                <span className="sr-only">Pending sync</span>
-                Pending
-              </span>
-            ) : null}
-            {high ? <Badge className="bg-high text-high-foreground">High</Badge> : null}
-            <span className="text-xs text-muted-foreground tabular-nums">{card.ageLabel}</span>
-          </span>
-        </div>
-        <p className={compact ? "mt-1 text-sm font-medium" : "mt-2 text-sm font-medium"}>
-          {card.propertyName} · {card.unitLabel}
-        </p>
-        <p className="mt-1 text-sm leading-5">{card.issue}</p>
-      </button>
-      <div className={compact ? "mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground" : "mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"}>
-        <span>{card.sourceLabel}</span>
-        <span className="inline-flex min-h-6 items-center gap-1">
-          <span
-            aria-hidden
-            className="inline-flex size-6 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
-          >
-            {card.assigneeName ? initials(card.assigneeName) : "—"}
-          </span>
-          {card.assigneeName ?? "Unassigned"}
-        </span>
-      </div>
-      {repeat || owner ? (
-        <div className={compact ? "mt-2 flex flex-wrap gap-2" : "mt-3 flex flex-wrap gap-2"}>
-          {repeat ? (
-            <Button type="button" size="field" variant="outline" onClick={() => onRepeat(card)}>
-              Repeat
-            </Button>
-          ) : null}
-          {owner && !card.pendingSync ? (
-            <>
-              <Button type="button" size="field" variant="outline" onClick={() => onStatus(card)}>
-                {statusLabel(card.status)}
-              </Button>
-              <Button type="button" size="field" variant="outline" onClick={() => onMore(card)}>
-                Assign
-              </Button>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-    </article>
-  )
 }
 
 function EnRouteSheet({
@@ -1195,66 +1071,6 @@ function StatusSheet({
   )
 }
 
-function AssignSheet({
-  card,
-  crew,
-  busy,
-  error,
-  onClose,
-  onSave,
-  onDelete,
-  onHigh,
-}: {
-  card: BoardCard | null
-  crew: BoardCatalog["crew"]
-  busy: boolean
-  error: string | null
-  onClose: () => void
-  onSave: (card: BoardCard, techId: string | null) => void
-  onDelete: (card: BoardCard) => void
-  onHigh: (card: BoardCard) => void
-}) {
-  return (
-    <Sheet open={card !== null} title="Assign" onClose={onClose}>
-      {card ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm leading-6">
-            {card.displayNumber} is {card.assigneeName ?? "unassigned"}.
-          </p>
-          {crew.map((person) => (
-            <Button
-              key={person.id}
-              type="button"
-              size="field"
-              variant={card.assignedUserId === person.id ? "default" : "outline"}
-              disabled={busy}
-              onClick={() => onSave(card, person.id)}
-            >
-              {person.fullName}
-            </Button>
-          ))}
-          {card.assignedUserId ? (
-            <Button type="button" size="field" variant="outline" disabled={busy} onClick={() => onSave(card, null)}>
-              Unassign
-            </Button>
-          ) : null}
-          <Button type="button" size="field" variant="outline" disabled={busy} onClick={() => onHigh(card)}>
-            {card.priority === "high" ? "Clear High" : "Mark High"}
-          </Button>
-          <Button type="button" size="field" variant="destructive" onClick={() => onDelete(card)}>
-            Delete duplicate
-          </Button>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-    </Sheet>
-  )
-}
-
 function DeleteSheet({
   card,
   busy,
@@ -1307,18 +1123,15 @@ function SyncPill({
       : offline
         ? "Offline"
         : pending > 0
-          ? `${pending} pending`
-          : "Synced"
-  const dot = hasError
-    ? "bg-destructive"
-    : mode === "preview" || offline
-      ? "bg-muted-foreground"
-      : pending > 0
-        ? "bg-amber-500"
-        : "bg-synced"
+          ? `${pending} waiting to sync`
+          : "All synced"
+  const tone = hasError
+    ? "bg-destructive/10 text-destructive"
+    : mode === "preview" || offline || pending > 0
+      ? "bg-free text-free-foreground"
+      : "bg-busy text-busy-foreground"
   return (
-    <span className="inline-flex min-h-12 items-center gap-2 rounded-full border border-border px-3 text-sm">
-      <span aria-hidden className={`size-2.5 rounded-full ${dot}`} />
+    <span role="status" className={`inline-flex items-center rounded-full px-2.5 py-1 text-[13px] font-bold ${tone}`}>
       {label}
     </span>
   )
@@ -1337,7 +1150,7 @@ function AccountMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        render={<Button variant="outline" size="field" className="min-w-12 px-3" />}
+        render={<Button variant="outline" size="field" className="min-w-12 px-3 text-foreground" />}
       >
         {initials(viewer.fullName)}
       </DropdownMenuTrigger>

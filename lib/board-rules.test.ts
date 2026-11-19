@@ -363,6 +363,10 @@ function card(overrides: Partial<BoardCard> & Pick<BoardCard, "id" | "priority" 
     ageLabel: "5m",
     repeatCalls: [],
     pendingSync: false,
+    myJobsPosition: null,
+    propertyLat: null,
+    propertyLng: null,
+    fieldState: null,
     ...overrides,
   }
 }

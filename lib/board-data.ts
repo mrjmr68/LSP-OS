@@ -7,6 +7,7 @@ import {
   type BoardCard,
   type BoardStatus,
   type BoardViewer,
+  type FieldState,
   type RepeatCall,
   compareBoardCards,
   isBoardStatus,
@@ -59,13 +60,54 @@ type RequestRow = {
   board_sort_bumped_at: string | null
   source: string
   unit_id: string
-  properties:
-    | { name: string; address_line1: string; city: string; state: string; zip: string }
-    | { name: string; address_line1: string; city: string; state: string; zip: string }[]
-    | null
+  my_jobs_position: number | null
+  properties: PropertyEmbed | PropertyEmbed[] | null
   units: { unit_label: string } | { unit_label: string }[] | null
   assignee: { full_name: string } | { full_name: string }[] | null
   customer_contacts: { name: string; phone: string | null } | { name: string; phone: string | null }[] | null
+}
+
+type PropertyEmbed = {
+  name: string
+  address_line1: string
+  city: string
+  state: string
+  zip: string
+  lat: number | string | null
+  lng: number | string | null
+}
+
+type LiveVisitRow = {
+  request_id: string
+  visit_seq: number
+  status: string
+  updated_at: string
+  time_segments: { kind: string; started_at: string; ended_at: string | null }[] | null
+}
+
+function toNumber(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null
+  const n = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Driving or on site, from the latest open visit of an In Progress job. */
+export function fieldStateFromVisits(visits: LiveVisitRow[]): FieldState | null {
+  const visit = [...visits]
+    .filter((v) => v.status === "en_route" || v.status === "on_site" || v.status === "working")
+    .sort((a, b) => b.visit_seq - a.visit_seq)[0]
+  if (!visit) return null
+  const segments = visit.time_segments ?? []
+  if (visit.status === "en_route") {
+    const travel = segments
+      .filter((t) => t.kind === "travel")
+      .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))[0]
+    return { kind: "driving", sinceMs: Date.parse(travel?.started_at ?? visit.updated_at) }
+  }
+  const onSite = segments
+    .filter((t) => t.kind !== "travel")
+    .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))[0]
+  return { kind: "on_site", sinceMs: Date.parse(onSite?.started_at ?? visit.updated_at) }
 }
 
 type RecentRow = {
@@ -110,7 +152,8 @@ const requestSelect = `
   board_sort_bumped_at,
   source,
   unit_id,
-  properties ( name, address_line1, city, state, zip ),
+  my_jobs_position,
+  properties ( name, address_line1, city, state, zip, lat, lng ),
   units ( unit_label ),
   assignee:profiles!service_requests_assigned_user_id_fkey ( full_name ),
   customer_contacts ( name, phone )
@@ -255,6 +298,7 @@ export async function loadBoard(): Promise<BoardLoad> {
         issue: row.issue,
         status: row.board_status,
         whenLabel: formatInNewYork(row.created_at),
+        createdAtMs: Date.parse(row.created_at),
         bundleCodes: bundleCodes(row.service_visits),
       }
       const list = repeatsByUnit.get(row.unit_id) ?? []
@@ -263,8 +307,26 @@ export async function loadBoard(): Promise<BoardLoad> {
     }
   }
 
+  const requestRows = (requestsResult.data ?? []) as RequestRow[]
+  const liveIds = requestRows.filter((r) => r.board_status === "in_progress").map((r) => r.id)
+  const fieldStates = new Map<string, FieldState>()
+  if (liveIds.length > 0) {
+    const { data: visitData } = await supabase
+      .from("service_visits")
+      .select("request_id, visit_seq, status, updated_at, time_segments ( kind, started_at, ended_at )")
+      .in("request_id", liveIds)
+    const byRequest = new Map<string, LiveVisitRow[]>()
+    for (const v of (visitData ?? []) as LiveVisitRow[]) {
+      byRequest.set(v.request_id, [...(byRequest.get(v.request_id) ?? []), v])
+    }
+    for (const [id, visits] of byRequest) {
+      const state = fieldStateFromVisits(visits)
+      if (state) fieldStates.set(id, state)
+    }
+  }
+
   const now = Date.now()
-  const cards = ((requestsResult.data ?? []) as RequestRow[])
+  const cards = requestRows
     .flatMap((row) => {
       if (!isBoardStatus(row.board_status)) {
         return []
@@ -296,6 +358,10 @@ export async function loadBoard(): Promise<BoardLoad> {
         createdAtMs: Date.parse(row.created_at),
         repeatCalls: history,
         pendingSync: false,
+        myJobsPosition: row.my_jobs_position,
+        propertyLat: toNumber(property?.lat),
+        propertyLng: toNumber(property?.lng),
+        fieldState: fieldStates.get(row.id) ?? null,
       }
       return [card]
     })
@@ -332,7 +398,7 @@ async function loadCatalog(
       .eq("active", true)
       .order("name"),
     supabase.from("contact_properties").select("contact_id, property_id"),
-    supabase.from("profiles").select("id, full_name, role, active").eq("active", true).order("full_name"),
+    supabase.from("profiles").select("id, full_name, role, active, tech_positions ( lat, lng, recorded_at )").eq("active", true).order("full_name"),
     supabase.from("app_config").select("repeat_unit_window_days").eq("id", 1).maybeSingle(),
     supabase.from("property_contract").select("property_id, resident_report_mode, resident_report_notes"),
   ])
@@ -410,15 +476,26 @@ async function loadCatalog(
     propertyId: row.property_id,
   }))
 
+  type PositionEmbed = { lat: number | string; lng: number | string; recorded_at: string }
+  const positionFreshMs = 4 * 60 * 60 * 1000
   const pickerCrew: BoardCrewMember[] = ((crew.data ?? []) as {
     id: string
     full_name: string
     role: "owner" | "tech"
-  }[]).map((row) => ({
-    id: row.id,
-    fullName: row.full_name,
-    role: row.role,
-  }))
+    tech_positions: PositionEmbed | PositionEmbed[] | null
+  }[]).map((row) => {
+    const position = one(row.tech_positions)
+    const seen = position ? Date.parse(position.recorded_at) : NaN
+    const fresh = Number.isFinite(seen) && Date.now() - seen < positionFreshMs
+    return {
+      id: row.id,
+      fullName: row.full_name,
+      role: row.role,
+      lastLat: fresh ? toNumber(position?.lat) : null,
+      lastLng: fresh ? toNumber(position?.lng) : null,
+      lastSeenMs: fresh ? seen : null,
+    }
+  })
 
   const windowDays =
     (config.data as { repeat_unit_window_days: number } | null)?.repeat_unit_window_days ?? 14

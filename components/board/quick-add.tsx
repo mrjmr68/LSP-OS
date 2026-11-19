@@ -337,7 +337,7 @@ function QuickAddForm({
             </div>
           ) : null}
           {warning ? (
-            <p role="status" className="rounded-lg border border-high/50 bg-high/15 px-3 py-3 text-sm leading-6">
+            <p role="status" className="rounded-lg border border-free-foreground/30 bg-free px-3 py-3 text-sm leading-6 text-free-foreground">
               {warning}. The call will still be saved.
             </p>
           ) : null}

@@ -246,6 +246,8 @@ export async function goEnRoute(input: {
 export async function assignRequest(input: {
   requestId: string
   techId: string | null
+  /** Put it at the top of their My Jobs (used when they're already busy). */
+  asNext?: boolean
 }): Promise<ActionResult<{ assigned: boolean; status: BoardStatus | null }>> {
   const ready = await readyClient()
   if (!ready.ok) {
@@ -265,9 +267,69 @@ export async function assignRequest(input: {
   if (error) {
     return { ok: false, message: actionMessage(error.message) }
   }
+  if (input.techId && input.asNext) {
+    const { data: queue } = await ready.supabase
+      .from("service_requests")
+      .select("id")
+      .eq("assigned_user_id", input.techId)
+      .in("board_status", ["assigned", "ready"])
+      .is("deleted_at", null)
+      .neq("id", input.requestId)
+      .order("my_jobs_position", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
+    const ids = [input.requestId, ...((queue ?? []) as { id: string }[]).map((r) => r.id)]
+    // Assignment already saved; a failed reorder only leaves it lower on their list.
+    await ready.supabase.rpc("set_my_jobs_order", { p_request_ids: ids })
+  }
   revalidatePath("/board")
   const status = typeof data === "string" && isBoardStatus(data) ? data : null
   return { ok: true, data: { assigned: input.techId !== null, status } }
+}
+
+/** A tech's (or owner's) own order on My Jobs. The database checks ownership. */
+export async function reorderMyJobs(requestIds: string[]): Promise<ActionResult<null>> {
+  const ready = await readyClient()
+  if (!ready.ok) {
+    return ready
+  }
+  if (requestIds.length === 0 || requestIds.length > 50 || !requestIds.every((id) => uuidPattern.test(id))) {
+    return { ok: false, message: "Open My Jobs again and retry." }
+  }
+  const { error } = await ready.supabase.rpc("set_my_jobs_order", { p_request_ids: requestIds })
+  if (error) {
+    return { ok: false, message: "That order didn't save. Pull down to refresh and try again." }
+  }
+  revalidatePath("/board")
+  return { ok: true, data: null }
+}
+
+/** Last known position, for the crew strip and "closest first". */
+export async function reportPosition(input: {
+  lat: number
+  lng: number
+  accuracyM: number | null
+}): Promise<ActionResult<null>> {
+  const ready = await readyClient()
+  if (!ready.ok) {
+    return ready
+  }
+  const { lat, lng } = input
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return { ok: false, message: "Bad position." }
+  }
+  const accuracy =
+    input.accuracyM !== null && Number.isFinite(input.accuracyM)
+      ? Math.min(100_000, Math.max(0, Math.round(input.accuracyM)))
+      : null
+  const { error } = await ready.supabase.rpc("report_my_position", {
+    p_lat: Math.round(lat * 1e6) / 1e6,
+    p_lng: Math.round(lng * 1e6) / 1e6,
+    p_accuracy_m: accuracy,
+  })
+  if (error) {
+    return { ok: false, message: "Position not saved." }
+  }
+  return { ok: true, data: null }
 }
 
 export async function setBoardStatus(input: {
