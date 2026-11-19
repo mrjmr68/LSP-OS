@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next"
 import { Atkinson_Hyperlegible, Barlow_Condensed } from "next/font/google"
 
 import { PwaRegister } from "@/components/pwa-register"
+import { TestBanner } from "@/components/test-banner"
 
 import "./globals.css"
 
@@ -49,6 +50,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${sans.variable} ${display.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
+        <TestBanner />
         <PwaRegister />
         {children}
       </body>

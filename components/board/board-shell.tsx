@@ -1353,6 +1353,11 @@ function AccountMenu({
         {viewer.mode === "authenticated" ? (
           <>
             <DropdownMenuSeparator />
+            {viewer.role === "owner" ? (
+              <DropdownMenuItem render={<a href="/setup" />} className="min-h-12">
+                Setup
+              </DropdownMenuItem>
+            ) : null}
             {viewer.profileId ? (
               <DropdownMenuItem className="min-h-12" onClick={onReport}>
                 Report / suggest

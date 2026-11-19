@@ -1,5 +1,7 @@
 import "server-only"
 
+import { outboundAllowed } from "@/lib/app-mode"
+
 export type FeedbackMailConfig = {
   apiKey: string
   from: string
@@ -22,6 +24,9 @@ export async function sendFeedbackNotice(input: {
 }): Promise<boolean> {
   const config = feedbackMailConfig()
   if (!config || input.to.length === 0) {
+    return false
+  }
+  if (!outboundAllowed("email")) {
     return false
   }
 
