@@ -1,21 +1,15 @@
 import type { Metadata, Viewport } from "next"
-import { Atkinson_Hyperlegible, Barlow_Condensed } from "next/font/google"
+import { Inter } from "next/font/google"
 
 import { PwaRegister } from "@/components/pwa-register"
 import { TestBanner } from "@/components/test-banner"
 
 import "./globals.css"
 
-const sans = Atkinson_Hyperlegible({
+const sans = Inter({
   subsets: ["latin"],
-  weight: ["400", "700"],
-  variable: "--font-atkinson",
-})
-
-const display = Barlow_Condensed({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  variable: "--font-barlow",
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-inter",
 })
 
 export const metadata: Metadata = {
@@ -37,7 +31,7 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: "#1c3330",
+  themeColor: "#111518",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -47,7 +41,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${sans.variable} ${display.variable} h-full antialiased`}
+      className={`${sans.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
         <TestBanner />

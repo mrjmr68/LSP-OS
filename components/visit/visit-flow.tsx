@@ -1294,7 +1294,7 @@ function SignaturePad({ onChange }: { onChange: (value: string | null) => void }
           drawing.current = true
           ctx.lineWidth = 3
           ctx.lineCap = "round"
-          ctx.strokeStyle = "#1c3330"
+          ctx.strokeStyle = "#111518"
           ctx.beginPath()
           ctx.moveTo(start.x, start.y)
           event.currentTarget.setPointerCapture(event.pointerId)

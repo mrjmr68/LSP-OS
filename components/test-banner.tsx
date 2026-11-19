@@ -8,7 +8,7 @@ export function TestBanner() {
   return (
     <div
       role="status"
-      className="bg-high px-4 py-1.5 text-center text-xs font-bold tracking-wide text-high-foreground uppercase"
+      className="bg-free px-4 py-1.5 text-center text-xs font-bold tracking-wide text-free-foreground uppercase"
     >
       Test copy · real data · no texts or emails go out
     </div>

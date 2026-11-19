@@ -93,7 +93,7 @@ export function PinMap({
         if (p) onMoveRef.current(p.lat, p.lng)
       })
       ring.current = leaflet
-        .circle([lat, lng], { radius: radiusM, color: "#1c3330", weight: 1, fillOpacity: 0.08 })
+        .circle([lat, lng], { radius: radiusM, color: "#0b5fd6", weight: 1, fillOpacity: 0.08 })
         .addTo(m)
     } else {
       pin.current.setLatLng([lat, lng])

@@ -72,6 +72,7 @@ export type RepeatCall = {
   issue: string
   status: BoardStatus
   whenLabel: string
+  createdAtMs: number
   bundleCodes: string[]
 }
 
@@ -95,7 +96,15 @@ export type BoardCard = {
   createdAtMs: number
   repeatCalls: RepeatCall[]
   pendingSync: boolean
+  /** The tech's own order on My Jobs (1 = next). Null until they or an owner order it. */
+  myJobsPosition: number | null
+  propertyLat: number | null
+  propertyLng: number | null
+  /** For In Progress jobs: is the tech driving or on site, and since when. */
+  fieldState: FieldState | null
 }
+
+export type FieldState = { kind: "driving" | "on_site"; sinceMs: number }
 
 export type BoardViewer = {
   mode: "preview" | "authenticated"
