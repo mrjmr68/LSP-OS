@@ -31,7 +31,7 @@ export function PublicPage({
             Privacy Policy
           </Link>
           <Link href="/terms" className="underline">
-            SMS Terms
+            Terms and Conditions
           </Link>
         </nav>
       </div>

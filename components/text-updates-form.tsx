@@ -88,7 +88,7 @@ export function TextUpdatesForm() {
           </Link>{" "}
           and{" "}
           <Link href="/terms" className="font-medium underline">
-            SMS Terms
+            Terms and Conditions
           </Link>
           .
         </span>
