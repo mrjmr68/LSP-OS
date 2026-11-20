@@ -5,7 +5,12 @@ import { money, reviewTag, type ReviewListItem } from "@/lib/review"
 function Card({ item, selected, wide }: { item: ReviewListItem; selected: boolean; wide: boolean }) {
   const tag = reviewTag(item)
   const first = item.techName?.split(" ")[0]
-  const href = item.kind === "invoice" ? `/review/invoice/${item.id}` : `/review/estimate/${item.id}`
+  const href =
+    item.kind === "invoice"
+      ? `/review/invoice/${item.id}`
+      : item.kind === "part"
+        ? `/parts#order-${item.id}`
+        : `/review/estimate/${item.id}`
   return (
     <Link
       href={href}
@@ -17,11 +22,20 @@ function Card({ item, selected, wide }: { item: ReviewListItem; selected: boolea
     >
       <span className={"flex justify-between gap-3 font-extrabold " + (wide ? "text-base" : "text-lg")}>
         <span className="min-w-0 truncate">{item.title}</span>
-        <span className="shrink-0 tabular-nums">{money(item.amountCents)}</span>
+        {item.kind === "part" ? null : <span className="shrink-0 tabular-nums">{money(item.amountCents)}</span>}
       </span>
       <span className={"text-muted-foreground " + (wide ? "text-sm" : "text-[15px]")}>
         {[item.summary, first, wide ? item.dateLabel : null].filter(Boolean).join(" · ")}
       </span>
+      {item.declined ? (
+        <span className="self-start rounded-lg bg-destructive/10 px-2 py-0.5 text-[13px] font-bold text-destructive">
+          Declined · bill or close
+        </span>
+      ) : item.kind === "part" ? (
+        <span className="self-start rounded-lg bg-free px-2 py-0.5 text-[13px] font-bold text-free-foreground">
+          {first ? `${first} asked you to order it` : "Asked you to order it"}
+        </span>
+      ) : null}
       {tag ? (
         <span
           className={
@@ -47,6 +61,7 @@ export function ReviewList({
 }) {
   const invoices = items.filter((i) => i.kind === "invoice")
   const estimates = items.filter((i) => i.kind === "estimate")
+  const parts = items.filter((i) => i.kind === "part")
   if (items.length === 0) {
     return (
       <p className="rounded-xl border border-border bg-card px-4 py-5 text-[15px] leading-6 text-muted-foreground">
@@ -66,8 +81,12 @@ export function ReviewList({
       {invoices.map((item) => (
         <Card key={item.id} item={item} selected={item.id === selectedId} wide={wide} />
       ))}
-      {estimates.length ? heading("DRAFT ESTIMATES", estimates.length) : null}
+      {estimates.length ? heading("ESTIMATES", estimates.length) : null}
       {estimates.map((item) => (
+        <Card key={item.id} item={item} selected={item.id === selectedId} wide={wide} />
+      ))}
+      {parts.length ? heading("PARTS TO ORDER", parts.length) : null}
+      {parts.map((item) => (
         <Card key={item.id} item={item} selected={item.id === selectedId} wide={wide} />
       ))}
     </div>
@@ -78,9 +97,11 @@ export function ReviewList({
 export function reviewCountLine(items: ReviewListItem[]): string {
   const inv = items.filter((i) => i.kind === "invoice").length
   const est = items.filter((i) => i.kind === "estimate").length
+  const part = items.filter((i) => i.kind === "part").length
   const parts = [
     inv ? `${inv} invoice${inv === 1 ? "" : "s"}` : null,
     est ? `${est} estimate${est === 1 ? "" : "s"}` : null,
+    part ? `${part} part${part === 1 ? "" : "s"} to order` : null,
   ].filter(Boolean)
   return parts.length ? parts.join(" · ") : "All caught up"
 }

@@ -39,10 +39,12 @@ export type PartCheck = {
   /** What the invoice is using now. */
   currentCents: number | null
   confirmed: boolean
+  /** From an approved estimate: the price holds and profit takes the difference. */
+  held: boolean
 }
 
 export type ReviewListItem = {
-  kind: "invoice" | "estimate"
+  kind: "invoice" | "estimate" | "part"
   id: string
   title: string
   amountCents: number
@@ -51,6 +53,8 @@ export type ReviewListItem = {
   dateLabel: string
   repairCount: number
   status: ReviewStatus | "sent" | "viewed" | "accepted" | "declined"
+  /** Estimates the property turned down, waiting on bill-or-close. */
+  declined?: boolean
   question: string | null
   answered: boolean
 }
@@ -161,6 +165,72 @@ export function invoiceEmail(input: {
       "Thank you,",
       input.companyName,
     ].join("\n"),
+  }
+}
+
+export function estimateEmail(input: {
+  number: string
+  propertyName: string
+  unitLabel: string
+  totalCents: number
+  link: string
+  companyName: string
+}): { subject: string; text: string } {
+  return {
+    subject: `Estimate ${input.number} · ${input.propertyName} ${input.unitLabel}`,
+    text: [
+      "Hello,",
+      "",
+      `Attached is estimate ${input.number} for ${input.propertyName}, unit ${input.unitLabel}: ${moneyExact(input.totalCents)}.`,
+      "",
+      "To approve or decline it, open this link:",
+      input.link,
+      "",
+      "Or reply to this email or call us.",
+      "",
+      "Thank you,",
+      input.companyName,
+    ].join("\n"),
+  }
+}
+
+export type EstimateStatus = "draft" | "in_review" | "sent" | "viewed" | "accepted" | "declined" | "void"
+
+/** The line under an estimate's title once it's out of draft. */
+export function estimateStatusLine(input: {
+  status: EstimateStatus
+  number: string | null
+  sentLabel: string | null
+  responseName: string | null
+  respondedVia: "link" | "owner" | null
+  declineOutcome: "billed" | "no_charge" | null
+}): string | null {
+  const n = input.number ? `Estimate ${input.number}` : "Estimate"
+  const who =
+    input.respondedVia === "link"
+      ? ` by ${input.responseName ?? "the property"} on the link`
+      : input.respondedVia === "owner"
+        ? " (recorded by an owner)"
+        : ""
+  switch (input.status) {
+    case "sent":
+      return `${n} · sent ${input.sentLabel ?? ""} · not opened yet`.trim()
+    case "viewed":
+      return `${n} · sent ${input.sentLabel ?? ""} · opened by the property`
+    case "accepted":
+      return `${n} · approved${who}`
+    case "declined":
+      return `${n} · declined${who}${
+        input.declineOutcome === "billed"
+          ? " · diagnostic billed"
+          : input.declineOutcome === "no_charge"
+            ? " · closed, no charge"
+            : ""
+      }`
+    case "void":
+      return `${n} · void`
+    default:
+      return null
   }
 }
 

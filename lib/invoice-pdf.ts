@@ -23,6 +23,11 @@ export type InvoiceDocument = {
   taxRateBps: number
   taxCents: number
   totalCents: number
+  /** An estimate prints the reason and the approve link instead of terms. */
+  kind?: "invoice" | "estimate"
+  narrative?: string | null
+  equipmentSize?: string | null
+  link?: string | null
 }
 
 export const COMPANY = {
@@ -94,6 +99,89 @@ export async function loadInvoiceDocument(supabase: Supabase, id: string): Promi
   }
 }
 
+function nyDate(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso))
+}
+
+/** A sent estimate, as the property sees it. Null until it has a number. */
+export async function loadEstimateDocument(
+  supabase: Supabase,
+  id: string,
+  link: string | null,
+): Promise<InvoiceDocument | null> {
+  const { data } = await supabase
+    .from("estimates")
+    .select(
+      "number, sent_at, narrative, equipment_size_text, bill_to_contact_id, bill_to_email_snap, property_snap, unit_snap, subtotal_cents, tax_rate_bps_snap, tax_cents, total_cents, request_id",
+    )
+    .eq("id", id)
+    .maybeSingle()
+  const est = data as {
+    number: string | null
+    sent_at: string | null
+    narrative: string
+    equipment_size_text: string | null
+    bill_to_contact_id: string | null
+    bill_to_email_snap: string | null
+    property_snap: string | null
+    unit_snap: string | null
+    subtotal_cents: number
+    tax_rate_bps_snap: number
+    tax_cents: number
+    total_cents: number
+    request_id: string
+  } | null
+  if (!est || !est.number || !est.sent_at) return null
+
+  const [lines, request] = await Promise.all([
+    supabase.from("estimate_lines").select("description_customer, amount_cents").eq("estimate_id", id).order("sort"),
+    supabase
+      .from("service_requests")
+      .select("contact_id, customers ( name ), properties ( address_line1, city, state, zip )")
+      .eq("id", est.request_id)
+      .maybeSingle(),
+  ])
+  type Prop = { address_line1: string; city: string; state: string; zip: string }
+  type Req = { contact_id: string; customers: { name: string } | { name: string }[] | null; properties: Prop | Prop[] | null }
+  const req = request.data as Req | null
+  const prop = Array.isArray(req?.properties) ? req?.properties[0] : req?.properties
+  const cust = Array.isArray(req?.customers) ? req?.customers[0] : req?.customers
+  const contactId = est.bill_to_contact_id ?? req?.contact_id ?? null
+  const { data: contact } = contactId
+    ? await supabase.from("customer_contacts").select("name").eq("id", contactId).maybeSingle()
+    : { data: null }
+  const day = nyDate(est.sent_at)
+  return {
+    kind: "estimate",
+    number: est.number,
+    invoiceDate: day,
+    dueDate: day,
+    termsDays: 0,
+    customerName: cust?.name ?? "",
+    contactName: (contact as { name: string } | null)?.name ?? null,
+    billEmail: est.bill_to_email_snap && est.bill_to_email_snap !== "unset" ? est.bill_to_email_snap : null,
+    propertyName: est.property_snap ?? "",
+    unitLabel: est.unit_snap ?? "",
+    address: prop ? `${prop.address_line1}, ${prop.city}, ${prop.state} ${prop.zip}` : "",
+    lines: ((lines.data ?? []) as { description_customer: string; amount_cents: number }[]).map((l) => ({
+      description: l.description_customer,
+      amountCents: l.amount_cents,
+    })),
+    subtotalCents: est.subtotal_cents,
+    taxRateBps: est.tax_rate_bps_snap,
+    taxCents: est.tax_cents,
+    totalCents: est.total_cents,
+    narrative: est.narrative,
+    equipmentSize: est.equipment_size_text,
+    link,
+  }
+}
+
 /** The standard PDF fonts only carry Western characters. */
 function plain(text: string): string {
   return text
@@ -124,7 +212,8 @@ function wrap(text: string, font: PDFFont, size: number, width: number): string[
 
 export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array> {
   const pdf = await PDFDocument.create()
-  pdf.setTitle(`Invoice ${doc.number}`)
+  const estimate = doc.kind === "estimate"
+  pdf.setTitle(`${estimate ? "Estimate" : "Invoice"} ${doc.number}`)
   pdf.setAuthor(COMPANY.name)
   const regular = await pdf.embedFont(StandardFonts.Helvetica)
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold)
@@ -147,13 +236,19 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   text(COMPANY.name, M, y - 4, 16, bold)
   const companyLines = [COMPANY.address, COMPANY.phone, COMPANY.email].filter(Boolean)
   companyLines.forEach((l, i) => text(l, M, y - 22 - i * 13, 10, regular, grey))
-  right("INVOICE", W - M, y - 4, 20, bold)
-  const meta: [string, string][] = [
-    ["Invoice", doc.number],
-    ["Date", longDate(doc.invoiceDate)],
-    ["Due", longDate(doc.dueDate)],
-    ["Terms", doc.termsDays === 0 ? "Due on receipt" : `Net ${doc.termsDays}`],
-  ]
+  right(estimate ? "ESTIMATE" : "INVOICE", W - M, y - 4, 20, bold)
+  const meta: [string, string][] = estimate
+    ? ([
+        ["Estimate", doc.number],
+        ["Date", longDate(doc.invoiceDate)],
+        doc.equipmentSize ? ["Equipment", doc.equipmentSize] : null,
+      ].filter(Boolean) as [string, string][])
+    : [
+        ["Invoice", doc.number],
+        ["Date", longDate(doc.invoiceDate)],
+        ["Due", longDate(doc.dueDate)],
+        ["Terms", doc.termsDays === 0 ? "Due on receipt" : `Net ${doc.termsDays}`],
+      ]
   meta.forEach(([k, v], i) => {
     right(v, W - M, y - 24 - i * 14, 10, bold)
     right(k, W - M - 130, y - 24 - i * 14, 10, regular, grey)
@@ -162,7 +257,7 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
 
   // Bill to / service location
   const col2 = M + 260
-  text("BILL TO", M, y, 8, bold, grey)
+  text(estimate ? "PREPARED FOR" : "BILL TO", M, y, 8, bold, grey)
   text("SERVICE LOCATION", col2, y, 8, bold, grey)
   y -= 14
   const billLines = [doc.customerName, doc.contactName, doc.billEmail].filter((l): l is string => Boolean(l))
@@ -173,6 +268,15 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
     if (siteLines[i]) text(siteLines[i], col2, y - i * 14, 10, i === 0 ? bold : regular)
   }
   y -= rows * 14 + 22
+
+  // An estimate says why first.
+  if (estimate && doc.narrative) {
+    text("WHAT WE FOUND", M, y, 8, bold, grey)
+    y -= 14
+    const reason = wrap(doc.narrative, regular, 10, W - M * 2)
+    reason.forEach((w, i) => text(w, M, y - i * 13, 10))
+    y -= reason.length * 13 + 18
+  }
 
   // Lines
   const amountX = W - M
@@ -204,7 +308,7 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
   const totals: [string, string, boolean][] = [
     ["Subtotal", moneyExact(doc.subtotalCents), false],
     [`Sales tax (${ratePercent(doc.taxRateBps)})`, moneyExact(doc.taxCents), false],
-    ["Total due", moneyExact(doc.totalCents), true],
+    [estimate ? "Estimate total" : "Total due", moneyExact(doc.totalCents), true],
   ]
   y -= 4
   for (const [label, value, strong] of totals) {
@@ -213,6 +317,15 @@ export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array
     y -= strong ? 20 : 15
   }
 
-  text("Thank you for your business.", M, M, 10, regular, grey)
+  if (estimate) {
+    const contact = [COMPANY.phone, COMPANY.email].filter(Boolean).join(" · ")
+    if (doc.link) {
+      text("To approve or decline this estimate, open:", M, M + 28, 10, bold)
+      text(doc.link, M, M + 14, 9, regular, grey)
+    }
+    text(contact ? `Questions? ${contact}` : "Questions? Reply to the email this came with.", M, M, 10, regular, grey)
+  } else {
+    text("Thank you for your business.", M, M, 10, regular, grey)
+  }
   return pdf.save()
 }

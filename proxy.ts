@@ -43,6 +43,8 @@ export async function proxy(request: NextRequest) {
   const isPublic =
     path.startsWith("/login") ||
     path.startsWith("/auth/") ||
+    // A property's estimate link: the token in the address is the key.
+    path.startsWith("/e/") ||
     PUBLIC_PAGES.has(path)
 
   if (!user && !isPublic) {

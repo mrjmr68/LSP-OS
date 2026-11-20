@@ -27,6 +27,19 @@ function friendly(message: string | undefined): string {
 function refresh(requestId: string) {
   revalidatePath(`/board/visit/${requestId}`)
   revalidatePath("/board")
+  revalidatePath("/parts")
+  revalidatePath("/review", "layout")
+}
+
+/** The tech hands the ordering to an owner. It shows under Needs you and on Parts. */
+export async function askOwnerForPart(requestId: string, partsOrderId: string): Promise<Result> {
+  const ready = await memberClient()
+  if (!ready.ok) return ready
+  if (!isUuid(partsOrderId) || !isUuid(requestId)) return { ok: false, message: "Reload the job." }
+  const { error } = await ready.supabase.rpc("ask_owner_for_part", { parts_order_id: partsOrderId })
+  if (error) return { ok: false, message: friendly(error.message) }
+  refresh(requestId)
+  return { ok: true, value: null }
 }
 
 export type OrderInput = {
