@@ -88,3 +88,7 @@ echo "Multi-repair proof passed."
 echo "Running owner review proof"
 run_sql "$root/supabase/tests/owner_review_proof.sql"
 echo "Owner review proof passed."
+
+echo "Running parts return proof"
+run_sql "$root/supabase/tests/parts_return_proof.sql"
+echo "Parts return proof passed."

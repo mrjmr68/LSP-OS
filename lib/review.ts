@@ -27,6 +27,18 @@ export type ReviewLine = {
   description: string
   amountCents: number
   costLines: ReviewCostLine[]
+  /** Variable-cost repairs only: the part cost the owner confirms before approving. */
+  partCheck: PartCheck | null
+}
+
+export type PartCheck = {
+  referenceCents: number | null
+  quotedCents: number | null
+  actualCents: number | null
+  receiptUrl: string | null
+  /** What the invoice is using now. */
+  currentCents: number | null
+  confirmed: boolean
 }
 
 export type ReviewListItem = {

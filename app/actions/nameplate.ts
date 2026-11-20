@@ -67,6 +67,7 @@ export type EquipmentInput = {
   serial: string
   tons: string
   refrigerant: string
+  year: string
 }
 
 /** Saves the unit's equipment record. It stays with the unit for every later visit. */
@@ -80,6 +81,10 @@ export async function saveEquipment(input: EquipmentInput): Promise<Result<{ id:
   if (tons !== null && (!Number.isFinite(tons) || tons <= 0 || tons > 25)) {
     return { ok: false, message: "Size is in tons, like 2.5." }
   }
+  const year = input.year.trim() === "" ? null : Number(input.year)
+  if (year !== null && (!Number.isInteger(year) || year < 1970 || year > new Date().getFullYear())) {
+    return { ok: false, message: "Pick the year it was made." }
+  }
   const row = {
     unit_id: input.unitId,
     kind: input.kind,
@@ -88,6 +93,7 @@ export async function saveEquipment(input: EquipmentInput): Promise<Result<{ id:
     serial: input.serial.trim().toUpperCase() || null,
     tonnage: tons,
     refrigerant: input.refrigerant.trim() || null,
+    manufactured_year: year,
   }
   const query =
     input.id === null

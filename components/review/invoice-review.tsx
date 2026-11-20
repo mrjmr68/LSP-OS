@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState, useTransition } from "react"
 
+import { confirmPartCost } from "@/app/actions/parts"
 import {
   addLine,
   approveAndSend,
@@ -47,6 +48,7 @@ export function InvoiceReview({ model }: { model: Model }) {
   const [confirming, setConfirming] = useState(false)
 
   const approved = model.status === "approved_sent" || model.status === "paid"
+  const unconfirmed = model.lines.filter((l) => l.partCheck && !l.partCheck.confirmed).length
   const readOnly = approved || pending
   const repairs = model.lines.filter((l) => l.source === "bundle").length
   const totals = invoiceTotals(model.lines, model.taxRateBps)
@@ -134,11 +136,12 @@ export function InvoiceReview({ model }: { model: Model }) {
       </button>
       <button
         type="button"
-        disabled={pending}
+        disabled={pending || unconfirmed > 0}
+        title={unconfirmed > 0 ? "Confirm the part cost first" : undefined}
         onClick={() => setConfirming(true)}
-        className="h-16 flex-[1.3] rounded-[14px] bg-primary text-[19px] font-extrabold text-primary-foreground disabled:opacity-60 lg:h-12 lg:flex-none lg:px-6 lg:text-base"
+        className="h-16 flex-[1.3] rounded-[14px] bg-primary text-[19px] font-extrabold text-primary-foreground disabled:opacity-50 lg:h-12 lg:flex-none lg:px-6 lg:text-base"
       >
-        Approve and send
+        {unconfirmed > 0 ? "Confirm part cost first" : "Approve and send"}
       </button>
     </>
   )
@@ -230,6 +233,12 @@ export function InvoiceReview({ model }: { model: Model }) {
                 run(() => updateLine(model.id, line.id, description, amount), () => setEditing(null))
               }
               onRemoveLine={() => run(() => removeLine(model.id, line.id))}
+              onConfirmPart={(cents) =>
+                run(async () => {
+                  const r = await confirmPartCost(model.id, line.id, cents)
+                  return r.ok ? { ok: true, message: "Part cost confirmed. The price follows it." } : r
+                })
+              }
               onError={(text) => setNotice({ tone: "error", text })}
             />
           ))}
@@ -412,6 +421,81 @@ function TimeTiles({ tiles }: { tiles: [string, number][] }) {
   )
 }
 
+/** The owner checks a variable-cost repair's part cost against the bill. */
+function PartCheckBox({
+  check,
+  readOnly,
+  onConfirm,
+  onError,
+}: {
+  check: NonNullable<ReviewLine["partCheck"]>
+  readOnly: boolean
+  onConfirm: (cents: number) => void
+  onError: (text: string) => void
+}) {
+  const start = check.actualCents ?? check.currentCents
+  const [value, setValue] = useState(start === null ? "" : (start / 100).toFixed(2))
+  const cell = (label: string, cents: number | null) => (
+    <div>
+      <dt className="text-[12px] text-muted-foreground">{label}</dt>
+      <dd className="font-bold tabular-nums">{cents === null ? "—" : money(cents)}</dd>
+    </div>
+  )
+  return (
+    <div
+      className={
+        "mt-1 flex flex-col gap-2 rounded-lg px-3 py-2.5 " +
+        (check.confirmed ? "bg-busy text-busy-foreground" : "bg-free text-free-foreground")
+      }
+    >
+      <p className="text-[13px] font-bold tracking-[0.06em] uppercase">
+        {check.confirmed ? "Part cost confirmed" : "Confirm the part cost"}
+      </p>
+      <dl className="grid grid-cols-3 gap-2 text-[14px]">
+        {cell("Price book", check.referenceCents)}
+        {cell("Quoted", check.quotedCents)}
+        {cell("Receipt", check.actualCents)}
+      </dl>
+      {check.receiptUrl ? (
+        <a href={check.receiptUrl} target="_blank" rel="noreferrer" className="text-[14px] font-bold underline">
+          View receipt photo
+        </a>
+      ) : (
+        <p className="text-[13px]">No receipt photo on this job.</p>
+      )}
+      {readOnly ? null : (
+        <div className="flex items-center gap-2">
+          <label className="sr-only" htmlFor={`part-${check.referenceCents}-${start}`}>
+            Actual part cost
+          </label>
+          <input
+            id={`part-${check.referenceCents}-${start}`}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            inputMode="decimal"
+            className="h-11 w-28 rounded-lg border border-input bg-card px-3 text-right text-base text-foreground tabular-nums"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const cents = parseDollars(value)
+              if (cents === null || cents < 0) {
+                onError("Type the part cost in dollars, like 412.50.")
+                return
+              }
+              onConfirm(cents)
+            }}
+            className="h-11 rounded-lg bg-ink px-4 text-[15px] font-bold text-ink-foreground"
+          >
+            {check.confirmed ? "Update" : "Confirm"}
+          </button>
+        </div>
+      )}
+      <p className="text-[12px] leading-4">The price moves with this cost, dollar for dollar. Profit stays the same.</p>
+    </div>
+  )
+}
+
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between text-[15px] text-muted-foreground">
@@ -444,6 +528,7 @@ function LineCard({
   onCost,
   onSaveLine,
   onRemoveLine,
+  onConfirmPart,
   onError,
 }: {
   line: ReviewLine
@@ -459,6 +544,7 @@ function LineCard({
   onCost: (cost: ReviewCostLine, change: { removed?: boolean; amountCents?: number }) => void
   onSaveLine: (description: string, amount: number | null) => void
   onRemoveLine: () => void
+  onConfirmPart: (cents: number) => void
   onError: (text: string) => void
 }) {
   const hasCosts = line.costLines.length > 0
@@ -535,6 +621,10 @@ function LineCard({
           </div>
         )
       })}
+
+      {line.partCheck ? (
+        <PartCheckBox check={line.partCheck} readOnly={readOnly} onConfirm={onConfirmPart} onError={onError} />
+      ) : null}
 
       {editing === wordingKey ? (
         <div className="mt-1 flex flex-col gap-2">

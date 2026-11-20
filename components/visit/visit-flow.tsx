@@ -9,9 +9,7 @@ import {
   attachVisitFile,
   closeVisit,
   markOnSite,
-  markPartInHand,
   recordAttempt,
-  savePartsOrder,
   addVisitBundle,
   removeVisitBundle,
   startJob,
@@ -20,6 +18,7 @@ import {
 } from "@/app/actions/visit"
 import { Sheet } from "@/components/board/sheet"
 import { MeterScan } from "@/components/visit/meter-scan"
+import { PartOrderPanel } from "@/components/visit/part-order"
 import { UnitEquipment } from "@/components/visit/unit-equipment"
 import { useVisitFlush } from "@/components/visit/visit-sync"
 import { Button } from "@/components/ui/button"
@@ -27,8 +26,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { mapsDirectionsUrl, runGoEnRoute } from "@/lib/board-rules"
 import { fixNow, locationState, onFix, startLocation } from "@/lib/location"
-import { equipmentLabel } from "@/lib/nameplate"
-import type { VisitBundle, VisitModel, VisitPart, VisitSelection, VisitSupplier } from "@/lib/visit-data"
+import { ageCheck, equipmentLabel, isSealedSystemRepair } from "@/lib/nameplate"
+import type { VisitBundle, VisitModel, VisitSelection, VisitSupplier } from "@/lib/visit-data"
 import {
   ATTEMPT_REASONS,
   READING_FIELDS,
@@ -205,12 +204,25 @@ function VisitSession({
   // The picked repairs decide what close asks for. A part-needing repair
   // means Parts; a change-out or a total over the property's limit suggests
   // an estimate (the tech can switch it); otherwise a simple repair.
-  const partRepairs = picks.filter((p) => p.oneShot)
+  // On a return visit the part is already in hand: the repair closes as an install.
+  const isReturn = model.visit?.isReturn === true
+  const partInHand = model.parts.some((p) => p.status === "in_hand")
+  const installing = isReturn && partInHand
+  const partRepairs = installing ? [] : picks.filter((p) => p.oneShot)
   const partText = partDescription.trim() || partRepairs.map((p) => p.title).join("; ")
   const pickTotal = picks.reduce((sum, p) => sum + p.priceCents, 0)
+  // Age check (Matt, Nov 19): a sealed-system part repair on equipment 10+
+  // years old, or on R-22, goes out as an estimate (repair vs. replace).
+  const ageReason = installing
+    ? null
+    : picks.some((p) => p.oneShot && isSealedSystemRepair(p.title))
+      ? ageCheck(model.equipment)
+      : null
   const suggestEstimate =
-    picks.some((p) => /change\s*-?\s*out/i.test(p.title)) ||
-    (model.estimateOverCents !== null && picks.length > 0 && pickTotal > model.estimateOverCents)
+    !installing &&
+    (picks.some((p) => /change\s*-?\s*out/i.test(p.title)) ||
+      ageReason !== null ||
+      (model.estimateOverCents !== null && picks.length > 0 && pickTotal > model.estimateOverCents))
   const asEstimate = estimateChoice ?? suggestEstimate
   const closePath: ClosePath | null = asEstimate && picks.length > 0
     ? "estimate"
@@ -231,7 +243,8 @@ function VisitSession({
     serial,
     bundleId: picks[0]?.bundleId ?? bundleId,
     requiresModelSerial: pickedBundles.some((b) => b.requiresModelSerial),
-    oneShot: picks.some((p) => p.oneShot),
+    // Installing a part that's in hand is a normal repair close.
+    oneShot: !installing && picks.some((p) => p.oneShot),
     signoff: model.signoff,
     signoffName,
     hasSignature: Boolean(signature) || model.visit?.hasSignature === true,
@@ -678,80 +691,6 @@ function VisitSession({
     router.refresh()
   }
 
-  async function handPart(part: VisitPart) {
-    setBusy(true)
-    setFormError(null)
-    const command: VisitCommand = {
-      id: newCommandId(),
-      requestId: model.requestId,
-      seenAt: seenAt.current,
-      kind: "part_in_hand",
-      partsOrderId: part.id,
-    }
-    const result = await commit(command, () =>
-      markPartInHand({
-        requestId: model.requestId,
-        partsOrderId: part.id,
-        seenAt: seenAt.current,
-      }),
-    )
-    setBusy(false)
-    if (result === null || (result !== "queued" && result.conflict)) {
-      return
-    }
-    setNotice(result === "queued" ? "Saved on this phone." : "Part in hand. The call is Ready.")
-    if (result !== "queued") {
-      router.refresh()
-    }
-  }
-
-  async function saveOrder() {
-    if (partDescription.trim() === "") {
-      setFormError("Say what part you need.")
-      return
-    }
-    setBusy(true)
-    setFormError(null)
-    const supplier = ownerWillFinish ? null : supplierId
-    const contact = ownerWillFinish ? "" : supplierContact
-    const order = ownerWillFinish ? "" : orderNumber
-    const eta = ownerWillFinish ? null : expectedDelivery || null
-    const command: VisitCommand = {
-      id: newCommandId(),
-      requestId: model.requestId,
-      seenAt: seenAt.current,
-      kind: "save_parts",
-      description: partDescription,
-      supplierId: supplier,
-      supplierContact: contact,
-      orderNumber: order,
-      expectedDelivery: eta,
-    }
-    const result = await commit(command, () =>
-      savePartsOrder({
-        requestId: model.requestId,
-        description: partDescription,
-        supplierId: supplier,
-        supplierContact: contact,
-        orderNumber: order,
-        expectedDelivery: eta,
-        seenAt: seenAt.current,
-      }),
-    )
-    setBusy(false)
-    if (result === null || (result !== "queued" && result.conflict)) {
-      return
-    }
-    setNotice(
-      ownerWillFinish
-        ? "Part saved. An owner can add the supplier and order number."
-        : "Part order saved.",
-    )
-    if (result !== "queued") {
-      router.refresh()
-    }
-  }
-
   function goBoard() {
     if (departureBlocked(path, modelText, serial) && (step === "diagnose" || step === "bundle" || step === "parts" || step === "close")) {
       setLeaveOpen(true)
@@ -946,9 +885,14 @@ function VisitSession({
         {/* ---------------- What did you find? ---------------- */}
         {isHub && mine ? (
           <>
+            {installing ? (
+              <p className="rounded-xl bg-busy px-4 py-3 text-[15px] leading-6 font-semibold text-busy-foreground">
+                Return trip: install the part from the first visit, take readings, then Wrap up.
+              </p>
+            ) : null}
             {picks.length > 0 ? (
               <section className="flex flex-col gap-1.5 rounded-xl border border-border bg-card px-4 py-3">
-                <Eyebrow>On this visit</Eyebrow>
+                <Eyebrow>{installing ? "Installing" : "On this visit"}</Eyebrow>
                 {picks.map((p) => (
                   <div key={p.id} className="flex items-center justify-between gap-3">
                     <span className="text-[17px] font-bold">{p.title}</span>
@@ -1117,44 +1061,24 @@ function VisitSession({
           </section>
         ) : null}
 
-        {/* Parts form (Stage 4 restyles this) */}
+        {/* ---------------- Parts: order it, then in hand with the real cost ---------------- */}
         {step === "parts_desk" && canParts ? (
-          <PartsForm
-            modelText={modelText}
-            serial={serial}
-            description={partDescription}
-            suppliers={suppliers}
-            supplierId={supplierId}
-            supplierContact={supplierContact}
-            orderNumber={orderNumber}
-            expectedDelivery={expectedDelivery}
-            ownerWillFinish={ownerWillFinish}
-            onDescription={setPartDescription}
-            onSupplier={setSupplierId}
-            onContact={setSupplierContact}
-            onOrder={setOrderNumber}
-            onEta={setExpectedDelivery}
-            onOwnerFinish={setOwnerWillFinish}
-          />
-        ) : null}
-        {step === "parts_desk" && canParts ? (
-          <>
-            <Button type="button" size="field" variant="outline" disabled={busy} onClick={() => void saveOrder()}>
-              Save part order
-            </Button>
-            {model.parts.map((part) => (
-              <div key={part.id} className="rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6">
-                <p className="font-bold">{part.description}</p>
-                <p>{part.orderNumber ? `Order ${part.orderNumber}` : "No order number yet"}</p>
-                <p>{part.status === "in_hand" ? "In hand" : part.status === "ordered" ? "Ordered" : "Needed"}</p>
-                {part.status !== "in_hand" ? (
-                  <Button type="button" className="mt-3" size="field" disabled={busy} onClick={() => void handPart(part)}>
-                    Part in hand
-                  </Button>
-                ) : null}
-              </div>
-            ))}
-          </>
+          model.parts.length === 0 ? (
+            <p className="rounded-xl border border-border bg-card px-4 py-3 text-[15px] text-muted-foreground">
+              No part order on this job.
+            </p>
+          ) : (
+            model.parts.map((part) => (
+              <PartOrderPanel
+                key={part.id}
+                requestId={model.requestId}
+                part={part}
+                suppliers={suppliers}
+                modelText={modelText || model.equipment.find((e) => e.model)?.model || ""}
+                serial={serial || model.equipment.find((e) => e.serial)?.serial || ""}
+              />
+            ))
+          )
         ) : null}
 
         {/* ---------------- Ready to close? ---------------- */}
@@ -1256,12 +1180,17 @@ function VisitSession({
                 ) : null}
               </section>
             ) : null}
-            {picks.length > 0 ? (
+            {picks.length > 0 && !installing ? (
               <label className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-2">
                 <span>
                   <span className="block text-[16px] font-bold">Send as an estimate</span>
                   <span className="block text-[13px] text-muted-foreground">
-                    {suggestEstimate ? "Suggested for this job. " : ""}The owner reviews it before it goes to the property.
+                    {ageReason
+                      ? `${ageReason} Suggested: repair or replace. `
+                      : suggestEstimate
+                        ? "Suggested for this job. "
+                        : ""}
+                    The owner reviews it before it goes to the property.
                   </span>
                 </span>
                 <input
@@ -1696,97 +1625,6 @@ function AccessBlock({ model }: { model: VisitModel }) {
           </Button>
         ) : null}
       </div>
-    </section>
-  )
-}
-
-function PartsForm({
-  modelText,
-  serial,
-  description,
-  suppliers,
-  supplierId,
-  supplierContact,
-  orderNumber,
-  expectedDelivery,
-  ownerWillFinish,
-  onDescription,
-  onSupplier,
-  onContact,
-  onOrder,
-  onEta,
-  onOwnerFinish,
-}: {
-  modelText: string
-  serial: string
-  description: string
-  suppliers: VisitSupplier[]
-  supplierId: string | null
-  supplierContact: string
-  orderNumber: string
-  expectedDelivery: string
-  ownerWillFinish: boolean
-  onDescription: (value: string) => void
-  onSupplier: (value: string | null) => void
-  onContact: (value: string) => void
-  onOrder: (value: string) => void
-  onEta: (value: string) => void
-  onOwnerFinish: (value: boolean) => void
-}) {
-  const supplier = suppliers.find((item) => item.id === supplierId) ?? null
-  return (
-    <section className="flex flex-col gap-3">
-      <h1 className="font-display text-2xl font-semibold tracking-wide">Order the part</h1>
-      <p className="text-sm leading-6">
-        Model {modelText || "—"} · Serial {serial || "—"}. Type both before you leave. A photo is not enough.
-      </p>
-      <Label htmlFor="part">Part</Label>
-      <Input id="part" value={description} onChange={(event) => onDescription(event.target.value)} className="min-h-12 text-base" />
-      <label className="flex min-h-12 items-center gap-3 text-base">
-        <input
-          type="checkbox"
-          checked={ownerWillFinish}
-          onChange={(event) => onOwnerFinish(event.target.checked)}
-          className="size-5"
-        />
-        Owner will finish
-      </label>
-      {ownerWillFinish ? (
-        <p className="text-sm leading-6">Supplier, order number, and delivery can stay blank. The call still goes to Parts.</p>
-      ) : (
-        <>
-          <Label htmlFor="supplier">Supplier</Label>
-          <select
-            id="supplier"
-            value={supplierId ?? ""}
-            onChange={(event) => onSupplier(event.target.value || null)}
-            className="min-h-12 rounded-lg border border-input bg-transparent px-3 text-base"
-          >
-            <option value="">None yet</option>
-            {suppliers.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          {supplier?.phone ? (
-            <Button render={<a href={`tel:${supplier.phone}`} />} size="field" variant="outline">
-              Call {supplier.name}
-            </Button>
-          ) : null}
-          {supplier?.email ? (
-            <Button render={<a href={`mailto:${supplier.email}`} />} size="field" variant="outline">
-              Email {supplier.name}
-            </Button>
-          ) : null}
-          <Label htmlFor="supplier-note">Supplier note</Label>
-          <Input id="supplier-note" value={supplierContact} onChange={(event) => onContact(event.target.value)} className="min-h-12 text-base" />
-          <Label htmlFor="order-number">Order number</Label>
-          <Input id="order-number" value={orderNumber} onChange={(event) => onOrder(event.target.value)} className="min-h-12 text-base" />
-          <Label htmlFor="eta">Expected delivery</Label>
-          <Input id="eta" type="date" value={expectedDelivery} onChange={(event) => onEta(event.target.value)} className="min-h-12 text-base" />
-        </>
-      )}
     </section>
   )
 }
