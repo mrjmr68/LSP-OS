@@ -4,6 +4,14 @@ import { useRouter } from "next/navigation"
 import { useState, useTransition } from "react"
 
 import { readNameplate, saveEquipment, type EquipmentInput } from "@/app/actions/nameplate"
+import {
+  BRAND_GROUPS,
+  REFRIGERANT_OPTIONS,
+  TON_OPTIONS,
+  matchBrand,
+  matchRefrigerant,
+} from "@/lib/nameplate"
+import { prepareForReading } from "@/lib/photo-read"
 import type { VisitEquipment } from "@/lib/visit-data"
 
 type Side = "outdoor" | "indoor"
@@ -101,11 +109,11 @@ function EquipmentCard({
       const v = r.value
       setForm((f) => ({
         ...f,
-        brand: v.brand ?? f.brand,
+        brand: matchBrand(v.brand) ?? f.brand,
         model: v.model ?? f.model,
         serial: v.serial ?? f.serial,
         tons: v.tons ? String(v.tons) : f.tons,
-        refrigerant: v.refrigerant ?? f.refrigerant,
+        refrigerant: matchRefrigerant(v.refrigerant) ?? f.refrigerant,
       }))
       setNotice(
         v.confidence === "low"
@@ -130,6 +138,7 @@ function EquipmentCard({
     })
   }
 
+  const pick = "h-12 w-full rounded-xl border-2 border-ink/70 bg-card px-3 text-[17px] outline-none focus-visible:border-primary"
   const field = "h-12 w-full rounded-xl border-2 border-ink/70 bg-card px-3 text-[17px] uppercase tabular-nums outline-none focus-visible:border-primary"
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
@@ -144,7 +153,7 @@ function EquipmentCard({
           id={id("kind")}
           value={form.kind}
           onChange={(e) => set("kind", e.target.value)}
-          className="h-9 rounded-lg border border-border bg-card px-2 text-[14px] font-semibold"
+          className="h-10 rounded-lg border border-border bg-card px-2 text-base font-semibold"
         >
           {KINDS[side].map((k) => (
             <option key={k.value} value={k.value}>
@@ -182,24 +191,58 @@ function EquipmentCard({
         </label>
         <input id={id("serial")} value={form.serial} onChange={(e) => set("serial", e.target.value)} className={field} autoCapitalize="characters" autoComplete="off" spellCheck={false} />
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="flex flex-col gap-1">
+        <label htmlFor={id("brand")} className="text-[15px] font-semibold">
+          Brand
+        </label>
+        <select id={id("brand")} value={form.brand} onChange={(e) => set("brand", e.target.value)} className={pick}>
+          <option value="">Pick a brand</option>
+          {BRAND_GROUPS.map((g) => (
+            <optgroup key={g.label} label={g.label}>
+              {g.brands.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+          <optgroup label="Other">
+            <option value="ICP">ICP (other)</option>
+            <option value="Other">Other</option>
+            {form.brand && !brandListed(form.brand) ? <option value={form.brand}>{form.brand}</option> : null}
+          </optgroup>
+        </select>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
         <div className="flex flex-col gap-1">
-          <label htmlFor={id("brand")} className="text-[13px] font-semibold">
-            Brand
+          <label htmlFor={id("tons")} className="text-[15px] font-semibold">
+            Size
           </label>
-          <input id={id("brand")} value={form.brand} onChange={(e) => set("brand", e.target.value)} className="h-11 w-full rounded-lg border border-input bg-card px-2 text-[15px]" />
+          <select id={id("tons")} value={form.tons} onChange={(e) => set("tons", e.target.value)} className={pick}>
+            <option value="">Tons</option>
+            {TON_OPTIONS.map((t) => (
+              <option key={t} value={t}>
+                {t} ton
+              </option>
+            ))}
+            {form.tons && !TON_OPTIONS.includes(form.tons) ? <option value={form.tons}>{form.tons} ton</option> : null}
+          </select>
         </div>
         <div className="flex flex-col gap-1">
-          <label htmlFor={id("tons")} className="text-[13px] font-semibold">
-            Tons
-          </label>
-          <input id={id("tons")} value={form.tons} onChange={(e) => set("tons", e.target.value)} inputMode="decimal" className="h-11 w-full rounded-lg border border-input bg-card px-2 text-[15px]" />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor={id("ref")} className="text-[13px] font-semibold">
+          <label htmlFor={id("ref")} className="text-[15px] font-semibold">
             Refrigerant
           </label>
-          <input id={id("ref")} value={form.refrigerant} onChange={(e) => set("refrigerant", e.target.value)} className="h-11 w-full rounded-lg border border-input bg-card px-2 text-[15px]" />
+          <select id={id("ref")} value={form.refrigerant} onChange={(e) => set("refrigerant", e.target.value)} className={pick}>
+            <option value="">Pick one</option>
+            {REFRIGERANT_OPTIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+            {form.refrigerant && !REFRIGERANT_OPTIONS.includes(form.refrigerant) ? (
+              <option value={form.refrigerant}>{form.refrigerant}</option>
+            ) : null}
+          </select>
         </div>
       </div>
 
@@ -232,27 +275,7 @@ function EquipmentCard({
   )
 }
 
-/** Big enough to read small print, small enough to send: 1600 px, JPEG. */
-async function prepareForReading(file: File): Promise<string> {
-  try {
-    const bitmap = await createImageBitmap(file)
-    for (const [edge, quality] of [
-      [1600, 0.82],
-      [1280, 0.75],
-      [1024, 0.7],
-    ] as const) {
-      const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height))
-      const canvas = document.createElement("canvas")
-      canvas.width = Math.round(bitmap.width * scale)
-      canvas.height = Math.round(bitmap.height * scale)
-      const ctx = canvas.getContext("2d")
-      if (!ctx) return ""
-      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-      const url = canvas.toDataURL("image/jpeg", quality)
-      if (url.length < 900_000) return url
-    }
-    return ""
-  } catch {
-    return ""
-  }
+const LISTED = new Set(["ICP", "Other", ...BRAND_GROUPS.flatMap((g) => g.brands)])
+function brandListed(brand: string): boolean {
+  return LISTED.has(brand)
 }
