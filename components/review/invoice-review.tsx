@@ -18,7 +18,7 @@ import type { InvoiceReview as Model } from "@/lib/review-data"
 import {
   invoiceTotals,
   longDate,
-  minutesLabel,
+  minutesShort,
   money,
   moneyExact,
   multiRepairNote,
@@ -72,15 +72,8 @@ export function InvoiceReview({ model }: { model: Model }) {
     setDraftAmount(amount)
   }
 
-  const timeLine = [
-    model.techName?.split(" ")[0],
-    model.dateLabel,
-    model.minutes.travel ? `travel ${minutesLabel(model.minutes.travel)}` : null,
-    model.minutes.access ? `getting in ${minutesLabel(model.minutes.access)}` : null,
-    model.minutes.work ? `work ${minutesLabel(model.minutes.work)}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ")
+  const timeLine = [model.techName?.split(" ")[0], model.dateLabel].filter(Boolean).join(" · ")
+  const totalMinutes = model.minutes.travel + model.minutes.access + model.minutes.work
 
   const actions = approved ? (
     <>
@@ -188,6 +181,15 @@ export function InvoiceReview({ model }: { model: Model }) {
           {notice.text}
         </p>
       ) : null}
+
+      <TimeTiles
+        tiles={[
+          ["Travel", model.minutes.travel],
+          ["Getting in", model.minutes.access],
+          ["Work", model.minutes.work],
+          ["Total", totalMinutes],
+        ]}
+      />
 
       {model.question ? (
         <div className="rounded-xl border-2 border-primary bg-card px-4 py-3 text-[15px] leading-6">
@@ -375,6 +377,38 @@ export function InvoiceReview({ model }: { model: Model }) {
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** How long the visit took, big enough to price against. */
+function TimeTiles({ tiles }: { tiles: [string, number][] }) {
+  return (
+    <section aria-label="Time on this visit" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {tiles.map(([label, minutes], i) => {
+        const total = i === tiles.length - 1
+        return (
+          <div
+            key={label}
+            className={
+              "flex min-w-0 flex-col rounded-xl px-3 py-2.5 " +
+              (total ? "bg-ink text-ink-foreground" : "border border-border bg-card")
+            }
+          >
+            <span
+              className={
+                "truncate text-[12px] font-bold tracking-[0.06em] uppercase " +
+                (total ? "text-ink-foreground/75" : "text-muted-foreground")
+              }
+            >
+              {label}
+            </span>
+            <span className="text-[24px] leading-tight font-extrabold whitespace-nowrap tabular-nums lg:text-[26px]">
+              {minutes > 0 ? minutesShort(minutes) : "—"}
+            </span>
+          </div>
+        )
+      })}
+    </section>
   )
 }
 

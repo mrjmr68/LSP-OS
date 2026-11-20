@@ -7,6 +7,7 @@ import {
   lineAmount,
   longDate,
   minutesLabel,
+  minutesShort,
   money,
   moneyExact,
   multiRepairNote,
@@ -74,6 +75,9 @@ test("labels", () => {
   assert.equal(minutesLabel(41), "41 min")
   assert.equal(minutesLabel(65), "1 hr 5 min")
   assert.equal(minutesLabel(120), "2 hr")
+  assert.equal(minutesShort(41), "41m")
+  assert.equal(minutesShort(65), "1h 5m")
+  assert.equal(minutesShort(120), "2h")
   assert.equal(shortDate("2026-11-17"), "Nov 17")
   assert.equal(longDate("2026-11-17T10:00:00Z"), "November 17, 2026")
 })

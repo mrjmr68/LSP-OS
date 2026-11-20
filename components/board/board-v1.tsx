@@ -12,7 +12,6 @@ import type { BoardCard } from "@/lib/board"
 import {
   PHONE_NOW_STAGES,
   assignChoices,
-  crewChipLabel,
   minutesSince,
   milesLabel,
   moveId,
@@ -90,29 +89,110 @@ export function Segmented<T extends string>({
 // Crew strip
 // ---------------------------------------------------------------------------
 
-export function CrewStrip({ crew, wide }: { crew: CrewState[]; wide: boolean }) {
+export function CrewStrip({
+  crew,
+  wide,
+  cards,
+  nowMs,
+}: {
+  crew: CrewState[]
+  wide: boolean
+  cards: readonly BoardCard[]
+  nowMs: number
+}) {
   if (crew.length === 0) return null
-  const ordered = [...crew].sort((a, b) => {
-    const rank = (c: CrewState) => (c.state === "free" ? 0 : 1)
-    return rank(a) - rank(b) || a.name.localeCompare(b.name)
-  })
+  const rank = (c: CrewState) => (c.state === "free" ? 0 : c.state === "driving" ? 1 : 2)
+  const ordered = [...crew].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+  const count = (s: CrewState["state"]) => crew.filter((c) => c.state === s).length
+  const summary = [
+    count("free") ? `${count("free")} free` : null,
+    count("driving") ? `${count("driving")} driving` : null,
+    count("on_site") ? `${count("on_site")} on site` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
   return (
-    <div className={wide ? "flex flex-wrap items-center gap-2" : "flex flex-col gap-1.5"}>
-      <SectionLabel>Crew</SectionLabel>
-      <div className="flex flex-wrap gap-1.5">
+    <section aria-label="Crew" className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <SectionLabel>Crew</SectionLabel>
+        <p className="text-sm font-semibold text-muted-foreground">{summary}</p>
+      </div>
+      <div
+        className={
+          "grid gap-2 " +
+          (wide ? "grid-cols-[repeat(auto-fill,minmax(13.5rem,1fr))]" : "grid-cols-2")
+        }
+      >
         {ordered.map((c) => (
-          <span
-            key={c.id}
-            className={
-              "rounded-full px-2.5 py-1.5 font-bold " +
-              (wide ? "text-[15px] " : "text-sm ") +
-              (c.state === "free" ? "bg-free text-free-foreground" : "bg-busy text-busy-foreground")
-            }
-          >
-            {crewChipLabel(c, wide)}
-          </span>
+          <CrewTile key={c.id} person={c} waiting={waitingFor(c.id, cards)} nowMs={nowMs} wide={wide} />
         ))}
       </div>
+    </section>
+  )
+}
+
+/** Jobs lined up for someone that they haven't started. */
+function waitingFor(id: string, cards: readonly BoardCard[]): number {
+  return cards.filter(
+    (c) => c.assignedUserId === id && (c.status === "assigned" || c.status === "ready" || c.status === "new"),
+  ).length
+}
+
+function sinceLabel(sinceMs: number | null, nowMs: number): string | null {
+  if (sinceMs === null) return null
+  const min = Math.max(0, Math.round((nowMs - sinceMs) / 60000))
+  if (min < 60) return `${min} min`
+  const h = Math.floor(min / 60)
+  return `${h} hr ${min % 60} min`
+}
+
+function CrewTile({
+  person,
+  waiting,
+  nowMs,
+  wide,
+}: {
+  person: CrewState
+  waiting: number
+  nowMs: number
+  wide: boolean
+}) {
+  const free = person.state === "free"
+  const status = free ? "Free" : person.state === "driving" ? "Driving" : "On site"
+  const since = free ? null : sinceLabel(person.sinceMs, nowMs)
+  return (
+    <div
+      className={
+        "flex min-w-0 flex-col gap-0.5 rounded-xl border-l-[6px] bg-card px-3 py-2.5 shadow-[0_0_0_1px_var(--border)] " +
+        (free ? "border-l-free-foreground/60" : "border-l-busy-foreground/70")
+      }
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <p className={"truncate font-extrabold " + (wide ? "text-lg" : "text-[17px]")}>{person.name}</p>
+        <span
+          className={
+            "shrink-0 rounded-md px-2 py-0.5 text-[13px] font-bold " +
+            (free ? "bg-free text-free-foreground" : "bg-busy text-busy-foreground")
+          }
+        >
+          {status}
+          {since ? ` · ${since}` : ""}
+        </span>
+      </div>
+      <p className="truncate text-[14px] leading-5 text-muted-foreground">
+        {free
+          ? waiting
+            ? `${waiting} job${waiting === 1 ? "" : "s"} lined up`
+            : "Nothing lined up"
+          : person.state === "driving"
+            ? `to ${person.where}`
+            : person.where}
+      </p>
+      {!free && waiting ? (
+        <p className="text-[13px] font-semibold text-muted-foreground">
+          then {waiting} more
+        </p>
+      ) : null}
     </div>
   )
 }

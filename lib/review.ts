@@ -92,6 +92,14 @@ export function minutesLabel(minutes: number): string {
   return rest === 0 ? `${h} hr` : `${h} hr ${rest} min`
 }
 
+/** Tight version for tiles: "41m", "1h 5m". */
+export function minutesShort(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes))
+  if (m < 60) return `${m}m`
+  const rest = m % 60
+  return rest === 0 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 60)}h ${rest}m`
+}
+
 /** The amber tag on a list card, or null. */
 export function reviewTag(item: Pick<ReviewListItem, "repairCount" | "question" | "answered" | "techName">): {
   text: string

@@ -70,6 +70,8 @@ export type VisitModel = {
   lockbox: string | null
   contactName: string
   contactPhone: string | null
+  /** Who to reach to get in: the person who called it in first, then the property's other contacts. */
+  contacts: VisitContact[]
   signoff: SignoffRule
   signoffNotes: string | null
   viewerId: string
@@ -108,6 +110,14 @@ export type VisitModel = {
   estimateOverCents: number | null
   /** The viewer's next job after this one, for "Next: …" on close. */
   nextJob: { id: string; title: string } | null
+}
+
+export type VisitContact = {
+  id: string
+  name: string
+  title: string | null
+  phone: string | null
+  calledItIn: boolean
 }
 
 export type VisitSelection = {
@@ -163,7 +173,8 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         unit_id,
         properties ( name, address_line1, city, state, zip, lat, lng, geofence_radius_m, lockbox_info ),
         units ( unit_label ),
-        customer_contacts ( name, phone )
+        contact_id,
+        customer_contacts ( name, phone, title )
       `,
     )
     .eq("id", requestId)
@@ -185,7 +196,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
   const unit = one(row.units)
   const contact = one(row.customer_contacts)
 
-  const [contractResult, visitsResult, partsResult, bundlesResult, linesResult, suppliersResult] =
+  const [contractResult, visitsResult, partsResult, bundlesResult, linesResult, suppliersResult, linksResult] =
     await Promise.all([
       supabase
         .from("property_contract")
@@ -215,6 +226,10 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         .order("code"),
       supabase.from("bundle_lines").select("bundle_id, description, kind").eq("kind", "part"),
       supabase.from("suppliers").select("id, name, phone, email").eq("active", true).order("name"),
+      supabase
+        .from("contact_properties")
+        .select("is_primary, customer_contacts ( id, name, title, phone, active )")
+        .eq("property_id", row.property_id),
     ])
 
   const visits = (visitsResult.data ?? []) as VisitRow[]
@@ -316,6 +331,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
       lockbox: contract?.lockbox_info ?? property?.lockbox_info ?? null,
       contactName: contact?.name ?? "Contact",
       contactPhone: contact?.phone ?? null,
+      contacts: visitContacts(row.contact_id, contact, linksResult.data),
       signoff: isSignoffRule(contract?.signoff_requirement) ? contract.signoff_requirement : "note_only",
       signoffNotes: contract?.signoff_notes ?? null,
       viewerId: viewer.id,
@@ -538,7 +554,11 @@ type RequestRow = {
   unit_id: string
   properties: PropertyEmbed | PropertyEmbed[] | null
   units: { unit_label: string } | { unit_label: string }[] | null
-  customer_contacts: { name: string; phone: string | null } | { name: string; phone: string | null }[] | null
+  contact_id: string
+  customer_contacts:
+    | { name: string; phone: string | null; title: string | null }
+    | { name: string; phone: string | null; title: string | null }[]
+    | null
 }
 
 type PropertyEmbed = {
@@ -635,4 +655,31 @@ function readReadings(value: unknown): Readings {
     }
   }
   return readings
+}
+
+type ContactLinkRow = {
+  is_primary: boolean
+  customer_contacts:
+    | { id: string; name: string; title: string | null; phone: string | null; active: boolean }
+    | { id: string; name: string; title: string | null; phone: string | null; active: boolean }[]
+    | null
+}
+
+/** The caller first, then the property's other active contacts (primary first). */
+function visitContacts(
+  callerId: string,
+  caller: { name: string; phone: string | null; title: string | null } | null,
+  links: unknown,
+): VisitContact[] {
+  const out: VisitContact[] = []
+  if (caller) {
+    out.push({ id: callerId, name: caller.name, title: caller.title, phone: caller.phone, calledItIn: true })
+  }
+  const rows = ((links ?? []) as ContactLinkRow[]).sort((a, b) => Number(b.is_primary) - Number(a.is_primary))
+  for (const row of rows) {
+    const contact = one(row.customer_contacts)
+    if (!contact || !contact.active || contact.id === callerId) continue
+    out.push({ id: contact.id, name: contact.name, title: contact.title, phone: contact.phone, calledItIn: false })
+  }
+  return out.slice(0, 4)
 }
