@@ -105,7 +105,7 @@ export function BoardShell({
   )
   useVisitFlush(() => router.refresh())
   const offline = useSyncExternalStore(subscribeOffline, getOfflineSnapshot, getOnlineServerSnapshot)
-  usePositionReporter(viewer.mode === "authenticated" && Boolean(viewer.profileId) && !offline)
+  const location = usePositionReporter(viewer.mode === "authenticated" && Boolean(viewer.profileId) && !offline)
   const [flushToken, setFlushToken] = useState(0)
   const [quickAddOpen, setQuickAddOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
@@ -405,6 +405,7 @@ export function BoardShell({
 
       <main className="flex flex-1 flex-col gap-3 px-5 pt-1 pb-28 lg:px-7 lg:pt-4 lg:pb-8">
         {notices}
+        <LocationNotice state={location.state} onTurnOn={location.turnOn} />
         {view === "mine" ? (
           <div className="mx-auto flex w-full max-w-md flex-col gap-3">
             {owner ? <div className="lg:hidden">{sync}</div> : null}
@@ -424,10 +425,10 @@ export function BoardShell({
             {owner ? (
               <>
                 <div className="lg:hidden">
-                  <CrewStrip crew={crew} wide={false} />
+                  <CrewStrip crew={crew} wide={false} cards={allCards} nowMs={nowMs} />
                 </div>
                 <div className="hidden lg:block">
-                  <CrewStrip crew={crew} wide />
+                  <CrewStrip crew={crew} wide cards={allCards} nowMs={nowMs} />
                 </div>
               </>
             ) : null}
@@ -1062,4 +1063,40 @@ function AccountMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+/** Asks for location once, from a tap, instead of the phone prompting on its own. */
+function LocationNotice({
+  state,
+  onTurnOn,
+}: {
+  state: string
+  onTurnOn: () => void
+}) {
+  if (state === "prompt") {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+        <p className="min-w-0 flex-1 text-[15px] leading-5">
+          <span className="font-bold">Location is off.</span>{" "}
+          <span className="text-muted-foreground">The crew view and closest-first use it.</span>
+        </p>
+        <button
+          type="button"
+          onClick={onTurnOn}
+          className="h-11 shrink-0 rounded-[10px] bg-primary px-4 text-[15px] font-bold text-primary-foreground"
+        >
+          Turn on
+        </button>
+      </div>
+    )
+  }
+  if (state === "denied") {
+    return (
+      <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm leading-5 text-muted-foreground">
+        Location is blocked for this app. To allow it on an iPhone: Settings → Apps → Safari →
+        Location → Allow (or Ask), then reopen the app.
+      </p>
+    )
+  }
+  return null
 }

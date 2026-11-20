@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { mapsDirectionsUrl, runGoEnRoute } from "@/lib/board-rules"
+import { fixNow, locationState, onFix, startLocation } from "@/lib/location"
 import type { VisitBundle, VisitModel, VisitPart, VisitSelection, VisitSupplier } from "@/lib/visit-data"
 import {
   ATTEMPT_REASONS,
@@ -364,27 +365,25 @@ function VisitSession({
     if (step !== "en_route" || model.lat === null || model.lng === null || !mine) {
       return
     }
-    if (!navigator.geolocation) {
-      return
-    }
-    const watch = navigator.geolocation.watchPosition((position) => {
-      if (arrived.current) {
-        return
-      }
-      const inside = withinGeofence(
-        position.coords.latitude,
-        position.coords.longitude,
-        model.lat as number,
-        model.lng as number,
-        model.geofenceRadiusM,
-      )
-      if (!inside) {
-        return
-      }
-      arrived.current = true
-      void arrive("gps", position.coords.latitude, position.coords.longitude)
+    // Auto-arrive only uses location the phone already allows; it never prompts.
+    let off: (() => void) | null = null
+    let stopped = false
+    void locationState().then((state) => {
+      if (stopped || state !== "granted") return
+      startLocation()
+      off = onFix((fix) => {
+        if (arrived.current) return
+        if (!withinGeofence(fix.lat, fix.lng, model.lat as number, model.lng as number, model.geofenceRadiusM)) {
+          return
+        }
+        arrived.current = true
+        void arrive("gps", fix.lat, fix.lng)
+      })
     })
-    return () => navigator.geolocation.clearWatch(watch)
+    return () => {
+      stopped = true
+      off?.()
+    }
   }, [arrive, mine, model.geofenceRadiusM, model.lat, model.lng, step])
 
   /** Start the job clock if it isn't running. Quiet: stays on the current screen. */
@@ -1318,14 +1317,68 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function GettingIn({ model }: { model: VisitModel }) {
-  const text = [model.accessText, model.lockbox].filter(Boolean).join(" ")
+  const hasCodes = Boolean(model.lockbox || model.accessText)
   return (
-    <section className="rounded-xl border border-border bg-card px-4 py-3">
+    <section className="flex flex-col gap-2">
       <Eyebrow>Getting in</Eyebrow>
-      <p className="mt-1 text-lg leading-snug font-bold">{text || "No access notes for this property."}</p>
-      {model.contactName && model.contactName !== "Contact" ? (
-        <p className="mt-1 text-[15px] text-muted-foreground">Contact: {model.contactName}</p>
-      ) : null}
+      <div className="rounded-xl border border-border bg-card px-4 py-3">
+        <p className="text-[12px] font-bold tracking-[0.08em] text-muted-foreground uppercase">Codes and entry</p>
+        {hasCodes ? (
+          <dl className="mt-1 flex flex-col gap-1.5">
+            {model.lockbox ? (
+              <div>
+                <dt className="text-[13px] text-muted-foreground">Lockbox</dt>
+                <dd className="text-xl leading-snug font-extrabold tracking-wide">{model.lockbox}</dd>
+              </div>
+            ) : null}
+            {model.accessText ? (
+              <div>
+                <dt className="text-[13px] text-muted-foreground">Entry notes</dt>
+                <dd className="text-[17px] leading-snug font-semibold">{model.accessText}</dd>
+              </div>
+            ) : null}
+          </dl>
+        ) : (
+          <p className="mt-1 text-[15px] text-muted-foreground">No codes or entry notes on file.</p>
+        )}
+      </div>
+      <div className="rounded-xl border border-border bg-card px-4 py-3">
+        <p className="text-[12px] font-bold tracking-[0.08em] text-muted-foreground uppercase">Who to reach</p>
+        {model.contacts.length === 0 ? (
+          <p className="mt-1 text-[15px] text-muted-foreground">No contact on file.</p>
+        ) : (
+          <ul className="mt-1 flex flex-col divide-y divide-border">
+            {model.contacts.map((c) => (
+              <li key={c.id} className="flex items-center gap-2 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[17px] font-bold">{c.name}</p>
+                  <p className="truncate text-[13px] text-muted-foreground">
+                    {[c.calledItIn ? "Called this in" : null, c.title].filter(Boolean).join(" · ") || "Property contact"}
+                  </p>
+                </div>
+                {c.phone ? (
+                  <>
+                    <a
+                      href={`sms:${c.phone}`}
+                      className="flex h-11 items-center rounded-[10px] border-2 border-ink px-3 text-[15px] font-bold"
+                    >
+                      Text
+                    </a>
+                    <a
+                      href={`tel:${c.phone}`}
+                      className="flex h-11 items-center rounded-[10px] bg-primary px-4 text-[15px] font-bold text-primary-foreground"
+                    >
+                      Call
+                    </a>
+                  </>
+                ) : (
+                  <span className="shrink-0 text-[13px] text-muted-foreground">No phone</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   )
 }
@@ -1696,17 +1749,10 @@ async function shrinkPhoto(file: File): Promise<string> {
   }
 }
 
-function currentPosition(): Promise<{ lat: number; lng: number } | null> {
-  if (typeof navigator === "undefined" || !navigator.geolocation) {
-    return Promise.resolve(null)
-  }
-  return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
-    )
-  })
+/** From a tap ("On my way" / "I'm here"); shares the app's one location watch. */
+async function currentPosition(): Promise<{ lat: number; lng: number } | null> {
+  const fix = await fixNow(8000)
+  return fix ? { lat: fix.lat, lng: fix.lng } : null
 }
 
 function openMapsTab(url: string): boolean {
