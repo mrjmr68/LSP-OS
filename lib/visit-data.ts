@@ -56,6 +56,8 @@ export type VisitPart = {
   /** The repair it's for is priced on the real part cost; In hand needs the cost and a receipt. */
   variable: boolean
   repairTitle: string | null
+  /** When the tech asked an owner to order it (still needed). */
+  helpAskedAt: string | null
 }
 
 export type VisitModel = {
@@ -112,6 +114,8 @@ export type VisitModel = {
   /** Every repair picked on this visit, oldest first. */
   selections: VisitSelection[]
   parts: VisitPart[]
+  /** An approved estimate this visit carries out (the work trip after approval). */
+  approvedEstimate: { number: string | null } | null
   photoCount: number
   history: string[]
   /** "This unit before": repairs on earlier calls, newest first. */
@@ -235,9 +239,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         .order("visit_seq", { ascending: false }),
       supabase
         .from("parts_orders")
-        .select(
-          "id, part_description, supplier_id, supplier_contact_text, order_number, expected_delivery_date, status, part_number, quoted_cost_cents, actual_cost_cents, receipt_path, suppliers ( name, phone, email ), visit_bundle_selections ( title_snap, bundles ( pricing_kind ) )",
-        )
+        .select(PART_SELECT)
         .eq("request_id", requestId)
         .neq("status", "cancelled"),
       supabase
@@ -328,11 +330,12 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
     requires_estimate_over_cents: number | null
   } | null
 
-  const [history, unitHistory, repeat, nextJob] = await Promise.all([
+  const [history, unitHistory, repeat, nextJob, approvedEstimate] = await Promise.all([
     loadHistory(supabase, row.unit_id, requestId),
     loadUnitHistory(supabase, row.unit_id, requestId),
     loadRepeat(supabase, row.unit_id, requestId),
     loadNextJob(supabase, viewer.id, requestId),
+    loadApprovedEstimate(supabase, requestId),
   ])
 
   return {
@@ -409,27 +412,8 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
       unitHistory,
       repeat,
       nextJob,
-      parts: ((partsResult.data ?? []) as PartRow[]).map((part) => {
-        const supplier = one(part.suppliers)
-        return {
-          id: part.id,
-          description: part.part_description,
-          supplierId: part.supplier_id,
-          supplierName: supplier?.name ?? null,
-          supplierPhone: supplier?.phone ?? null,
-          supplierEmail: supplier?.email ?? null,
-          contactText: part.supplier_contact_text,
-          orderNumber: part.order_number ?? "",
-          expectedDelivery: part.expected_delivery_date,
-          status: part.status,
-          partNumber: part.part_number ?? "",
-          quotedCents: part.quoted_cost_cents,
-          actualCents: part.actual_cost_cents,
-          hasReceipt: Boolean(part.receipt_path),
-          variable: one(one(part.visit_bundle_selections)?.bundles ?? null)?.pricing_kind === "variable",
-          repairTitle: one(part.visit_bundle_selections)?.title_snap ?? null,
-        }
-      }),
+      parts: ((partsResult.data ?? []) as PartRow[]).map(toVisitPart),
+      approvedEstimate,
       photoCount,
       history,
     },
@@ -646,8 +630,12 @@ type VisitRow = {
   visit_type: string
 }
 
-type PartRow = {
+export const PART_SELECT =
+  "id, part_description, supplier_id, supplier_contact_text, order_number, expected_delivery_date, status, part_number, quoted_cost_cents, actual_cost_cents, receipt_path, owner_help_at, suppliers ( name, phone, email ), visit_bundle_selections ( title_snap, bundles ( pricing_kind ) )"
+
+export type PartRow = {
   id: string
+  owner_help_at: string | null
   part_description: string
   supplier_id: string | null
   supplier_contact_text: string | null
@@ -663,6 +651,43 @@ type PartRow = {
     | { title_snap: string; bundles: { pricing_kind: string } | { pricing_kind: string }[] | null }
     | { title_snap: string; bundles: { pricing_kind: string } | { pricing_kind: string }[] | null }[]
     | null
+}
+
+/** The approved estimate whose work hasn't been invoiced yet, if any. */
+async function loadApprovedEstimate(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  requestId: string,
+): Promise<{ number: string | null } | null> {
+  const [est, inv] = await Promise.all([
+    supabase.from("estimates").select("number").eq("request_id", requestId).eq("status", "accepted").limit(1),
+    supabase.from("invoice_records").select("id").eq("request_id", requestId).limit(1),
+  ])
+  const row = ((est.data ?? []) as { number: string | null }[])[0]
+  if (!row || (inv.data ?? []).length > 0) return null
+  return { number: row.number }
+}
+
+export function toVisitPart(part: PartRow): VisitPart {
+  const supplier = one(part.suppliers)
+  return {
+    id: part.id,
+    description: part.part_description,
+    supplierId: part.supplier_id,
+    supplierName: supplier?.name ?? null,
+    supplierPhone: supplier?.phone ?? null,
+    supplierEmail: supplier?.email ?? null,
+    contactText: part.supplier_contact_text,
+    orderNumber: part.order_number ?? "",
+    expectedDelivery: part.expected_delivery_date,
+    status: part.status,
+    partNumber: part.part_number ?? "",
+    quotedCents: part.quoted_cost_cents,
+    actualCents: part.actual_cost_cents,
+    hasReceipt: Boolean(part.receipt_path),
+    variable: one(one(part.visit_bundle_selections)?.bundles ?? null)?.pricing_kind === "variable",
+    repairTitle: one(part.visit_bundle_selections)?.title_snap ?? null,
+    helpAskedAt: part.owner_help_at,
+  }
 }
 
 type BundleRow = {

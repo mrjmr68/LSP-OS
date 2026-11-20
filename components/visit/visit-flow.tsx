@@ -207,7 +207,9 @@ function VisitSession({
   // On a return visit the part is already in hand: the repair closes as an install.
   const isReturn = model.visit?.isReturn === true
   const partInHand = model.parts.some((p) => p.status === "in_hand")
-  const installing = isReturn && partInHand
+  // The work trip after an approved estimate: no re-diagnosis, no new estimate.
+  const doingApproved = isReturn && model.approvedEstimate !== null
+  const installing = isReturn && (partInHand || doingApproved)
   const partRepairs = installing ? [] : picks.filter((p) => p.oneShot)
   const partText = partDescription.trim() || partRepairs.map((p) => p.title).join("; ")
   const pickTotal = picks.reduce((sum, p) => sum + p.priceCents, 0)
@@ -224,7 +226,9 @@ function VisitSession({
       ageReason !== null ||
       (model.estimateOverCents !== null && picks.length > 0 && pickTotal > model.estimateOverCents))
   const asEstimate = estimateChoice ?? suggestEstimate
-  const closePath: ClosePath | null = asEstimate && picks.length > 0
+  const closePath: ClosePath | null = doingApproved && picks.length === 0
+    ? "easy"
+    : asEstimate && picks.length > 0
     ? "estimate"
     : partRepairs.length > 0
       ? "parts"
@@ -241,7 +245,8 @@ function VisitSession({
     note,
     model: modelText,
     serial,
-    bundleId: picks[0]?.bundleId ?? bundleId,
+    // An approved estimate of written lines only has no repair to pick.
+    bundleId: picks[0]?.bundleId ?? (doingApproved ? "approved-estimate" : bundleId),
     requiresModelSerial: pickedBundles.some((b) => b.requiresModelSerial),
     // Installing a part that's in hand is a normal repair close.
     oneShot: !installing && picks.some((p) => p.oneShot),
@@ -887,12 +892,14 @@ function VisitSession({
           <>
             {installing ? (
               <p className="rounded-xl bg-busy px-4 py-3 text-[15px] leading-6 font-semibold text-busy-foreground">
-                Return trip: install the part from the first visit, take readings, then Wrap up.
+                {doingApproved
+                  ? `Approved estimate${model.approvedEstimate?.number ? ` ${model.approvedEstimate.number}` : ""}: do the approved work, take readings, then Wrap up. The price is what the property approved.`
+                  : "Return trip: install the part from the first visit, take readings, then Wrap up."}
               </p>
             ) : null}
             {picks.length > 0 ? (
               <section className="flex flex-col gap-1.5 rounded-xl border border-border bg-card px-4 py-3">
-                <Eyebrow>{installing ? "Installing" : "On this visit"}</Eyebrow>
+                <Eyebrow>{doingApproved ? "Approved work" : installing ? "Installing" : "On this visit"}</Eyebrow>
                 {picks.map((p) => (
                   <div key={p.id} className="flex items-center justify-between gap-3">
                     <span className="text-[17px] font-bold">{p.title}</span>
@@ -1076,6 +1083,7 @@ function VisitSession({
                 suppliers={suppliers}
                 modelText={modelText || model.equipment.find((e) => e.model)?.model || ""}
                 serial={serial || model.equipment.find((e) => e.serial)?.serial || ""}
+                canAskOwner={model.viewerRole !== "owner"}
               />
             ))
           )

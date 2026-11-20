@@ -48,6 +48,10 @@ export type BoardReview = {
   count: number
   /** Request id → its draft invoice, so an owner's tap on a Complete card opens the review. */
   draftByRequest: Record<string, string>
+  /** Request id → its estimate, so an owner's tap on an Estimate card opens it. */
+  estimateByRequest: Record<string, string>
+  /** Part orders still to order or waiting to arrive (owners only), for the Parts door. */
+  partsCount: number
   /** Questions an owner asked this viewer about their drafts. */
   questions: TechQuestion[]
 }
@@ -59,7 +63,13 @@ export type TechQuestion = {
   askedBy: string
 }
 
-const emptyReview: BoardReview = { count: 0, draftByRequest: {}, questions: [] }
+const emptyReview: BoardReview = {
+  count: 0,
+  draftByRequest: {},
+  estimateByRequest: {},
+  partsCount: 0,
+  questions: [],
+}
 
 type ProfileRow = {
   id: string
@@ -406,15 +416,26 @@ async function loadBoardReview(
 ): Promise<BoardReview> {
   if (!viewer.profileId) return emptyReview
   const owner = viewer.role === "owner"
-  const [invoices, estimates] = await Promise.all([
+  const [invoices, estimates, parts] = await Promise.all([
     supabase
       .from("invoice_records")
       .select("id, request_id, status, flag_question, flag_asked_by, property_snap, unit_snap")
       .in("status", owner ? ["draft", "in_review", "flagged"] : ["flagged"]),
     owner
-      ? supabase.from("estimates").select("id", { count: "exact", head: true }).in("status", ["draft", "in_review"])
-      : Promise.resolve({ count: 0 }),
+      ? supabase.from("estimates").select("id, request_id, status, decline_settled_at").neq("status", "void")
+      : Promise.resolve({ data: [] }),
+    owner
+      ? supabase.from("parts_orders").select("id, status, owner_help_at").in("status", ["needed", "ordered"])
+      : Promise.resolve({ data: [] }),
   ])
+  type EstRow = { id: string; request_id: string; status: string; decline_settled_at: string | null }
+  const estRows = (estimates.data ?? []) as EstRow[]
+  const estimatesWaiting = estRows.filter(
+    (e) => e.status === "draft" || e.status === "in_review" || (e.status === "declined" && !e.decline_settled_at),
+  ).length
+  type PartRow = { id: string; status: string; owner_help_at: string | null }
+  const partRows = (parts.data ?? []) as PartRow[]
+  const partsAsked = partRows.filter((p) => p.status === "needed" && p.owner_help_at).length
   type Row = {
     id: string
     request_id: string
@@ -435,8 +456,10 @@ async function loadBoardReview(
     }
   }
   return {
-    count: owner ? rows.length + (estimates.count ?? 0) : 0,
+    count: owner ? rows.length + estimatesWaiting + partsAsked : 0,
     draftByRequest: owner ? Object.fromEntries(rows.map((r) => [r.request_id, r.id])) : {},
+    estimateByRequest: owner ? Object.fromEntries(estRows.map((e) => [e.request_id, e.id])) : {},
+    partsCount: owner ? partRows.length : 0,
     questions: rows
       .filter((r) => r.status === "flagged" && r.flag_question && mine.has(r.request_id))
       .map((r) => ({

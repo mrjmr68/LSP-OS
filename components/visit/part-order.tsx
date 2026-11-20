@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation"
 import { useState, useTransition } from "react"
 
-import { orderPart, receivePart } from "@/app/actions/parts"
+import { askOwnerForPart, orderPart, receivePart } from "@/app/actions/parts"
 import { prepareForReading } from "@/lib/photo-read"
 import { moneyExact, parseDollars } from "@/lib/review"
 import type { VisitPart, VisitSupplier } from "@/lib/visit-data"
@@ -18,12 +18,18 @@ export function PartOrderPanel({
   suppliers,
   modelText,
   serial,
+  canAskOwner = false,
+  showHeader = true,
 }: {
   requestId: string
   part: VisitPart
   suppliers: VisitSupplier[]
   modelText: string
   serial: string
+  /** Techs can hand the ordering to an owner. */
+  canAskOwner?: boolean
+  /** The Parts tab shows its own header row. */
+  showHeader?: boolean
 }) {
   const router = useRouter()
   const [pending, start] = useTransition()
@@ -86,10 +92,36 @@ export function PartOrderPanel({
     })
   }
 
+  function askOwner() {
+    start(async () => {
+      const r = await askOwnerForPart(requestId, part.id)
+      setNotice(r.ok ? { tone: "ok", text: "Asked. It's in the owners' Needs you list." } : { tone: "error", text: r.message })
+      if (r.ok) router.refresh()
+    })
+  }
+
   const status = inHand ? "In hand" : part.status === "ordered" ? "Ordered" : "Needs ordering"
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
+    <section
+      className={
+        showHeader ? "flex flex-col gap-3 rounded-xl border border-border bg-card p-4" : "flex flex-col gap-3"
+      }
+    >
+      {part.status === "needed" && part.helpAskedAt && showHeader ? (
+        <p className="rounded-lg bg-free px-3 py-2 text-[14px] leading-5 font-semibold text-free-foreground">
+          An owner was asked to order this.
+        </p>
+      ) : canAskOwner && part.status === "needed" ? (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={askOwner}
+          className="h-12 rounded-xl border-2 border-dashed border-ink/60 bg-card text-[16px] font-bold disabled:opacity-60"
+        >
+          Ask an owner to order it
+        </button>
+      ) : null}
+      <div className={showHeader ? "flex items-start justify-between gap-3" : "hidden"}>
         <div className="min-w-0">
           <p className="text-[13px] font-bold tracking-[0.08em] text-muted-foreground uppercase">Part for</p>
           <p className="text-[19px] leading-snug font-extrabold">{part.repairTitle ?? part.description}</p>

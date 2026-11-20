@@ -78,7 +78,7 @@ export function BoardShell({
   profileMissing,
   loadError,
   initialView,
-  review = { count: 0, draftByRequest: {}, questions: [] },
+  review = { count: 0, draftByRequest: {}, estimateByRequest: {}, partsCount: 0, questions: [] },
 }: {
   viewer: BoardViewer
   cards: BoardCard[]
@@ -246,6 +246,11 @@ export function BoardShell({
       router.push(`/review/invoice/${draft}`)
       return
     }
+    const estimate = owner ? review.estimateByRequest[card.id] : undefined
+    if (estimate && (card.status === "to_estimate" || card.status === "estimate_out")) {
+      router.push(`/review/estimate/${estimate}`)
+      return
+    }
     setPanelError(null)
     setDetailNote(null)
     setDirectionsUrl(null)
@@ -360,6 +365,9 @@ export function BoardShell({
             <>
               <a href="/review" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
                 Review{review.count ? ` · ${review.count}` : ""}
+              </a>
+              <a href="/parts" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
+                Parts{review.partsCount ? ` · ${review.partsCount}` : ""}
               </a>
               <a href="/setup" className="rounded-[10px] px-4 py-2.5 text-[17px] font-bold text-ink-foreground/85 hover:text-ink-foreground">
                 Setup

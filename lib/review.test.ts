@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  estimateEmail,
+  estimateStatusLine,
   invoiceEmail,
   invoiceTotals,
   lineAmount,
@@ -93,4 +95,39 @@ test("invoice email names the number, place, amount and due date", () => {
   })
   assert.equal(mail.subject, "Invoice 1001 · Juniper Village 12B")
   assert.match(mail.text, /\$492\.20, due December 17, 2026/)
+})
+
+test("estimate status line says where it stands and who answered", () => {
+  const base = {
+    number: "E1001",
+    sentLabel: "today",
+    responseName: null,
+    respondedVia: null,
+    declineOutcome: null,
+  } as const
+  assert.equal(estimateStatusLine({ ...base, status: "draft" }), null)
+  assert.equal(estimateStatusLine({ ...base, status: "sent" }), "Estimate E1001 · sent today · not opened yet")
+  assert.equal(estimateStatusLine({ ...base, status: "viewed" }), "Estimate E1001 · sent today · opened by the property")
+  assert.equal(
+    estimateStatusLine({ ...base, status: "accepted", respondedVia: "link", responseName: "Dana" }),
+    "Estimate E1001 · approved by Dana on the link",
+  )
+  assert.equal(
+    estimateStatusLine({ ...base, status: "declined", respondedVia: "owner", declineOutcome: "billed" }),
+    "Estimate E1001 · declined (recorded by an owner) · diagnostic billed",
+  )
+})
+
+test("estimate email carries the total and the approve link", () => {
+  const mail = estimateEmail({
+    number: "E1001",
+    propertyName: "Four Seasons Flats",
+    unitLabel: "101",
+    totalCents: 173131,
+    link: "https://example.test/e/abc",
+    companyName: "Legend Service Pros LLC",
+  })
+  assert.equal(mail.subject, "Estimate E1001 · Four Seasons Flats 101")
+  assert.match(mail.text, /\$1,731\.31/)
+  assert.match(mail.text, /https:\/\/example\.test\/e\/abc/)
 })

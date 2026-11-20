@@ -6,6 +6,7 @@ import { connection } from "next/server"
 import { isSupabaseConfigured } from "@/lib/env"
 import type {
   CostKind,
+  EstimateStatus,
   ReviewCostLine,
   ReviewLine,
   ReviewListItem,
@@ -86,7 +87,7 @@ export async function loadReviewList(supabase: Supabase): Promise<ReviewListItem
     supabase
       .from("estimates")
       .select("id, status, total_cents, property_snap, unit_snap, created_at, created_by, equipment_size_text")
-      .in("status", OPEN_ESTIMATE)
+      .or(`status.in.(${OPEN_ESTIMATE.join(",")}),and(status.eq.declined,decline_settled_at.is.null)`)
       .order("created_at", { ascending: true }),
     crewNames(supabase),
   ])
@@ -179,6 +180,40 @@ export async function loadReviewList(supabase: Supabase): Promise<ReviewListItem
       status: est.status,
       question: null,
       answered: false,
+      declined: est.status === "declined",
+    })
+  }
+
+  // Parts a tech asked an owner to order.
+  const { data: helpData } = await supabase
+    .from("parts_orders")
+    .select("id, part_description, owner_help_at, owner_help_by, service_requests ( properties ( name ), units ( unit_label ) )")
+    .eq("status", "needed")
+    .not("owner_help_at", "is", null)
+    .order("owner_help_at", { ascending: true })
+  type One<T> = T | T[] | null
+  const first = <T,>(v: One<T>): T | null => (Array.isArray(v) ? (v[0] ?? null) : v)
+  type HelpRow = {
+    id: string
+    part_description: string
+    owner_help_at: string
+    owner_help_by: string | null
+    service_requests: One<{ properties: One<{ name: string }>; units: One<{ unit_label: string }> }>
+  }
+  for (const row of (helpData ?? []) as HelpRow[]) {
+    const req = first(row.service_requests)
+    items.push({
+      kind: "part",
+      id: row.id,
+      title: `${first(req?.properties ?? null)?.name ?? "Property"} ${first(req?.units ?? null)?.unit_label ?? ""}`.trim(),
+      amountCents: 0,
+      summary: `Order: ${row.part_description}`,
+      techName: row.owner_help_by ? (names.get(row.owner_help_by) ?? null) : null,
+      dateLabel: dayLabel(row.owner_help_at),
+      repairCount: 0,
+      status: "draft",
+      question: null,
+      answered: false,
     })
   }
   return items
@@ -256,7 +291,7 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
       supabase
         .from("invoice_lines")
         .select(
-          "id, sort, source, description_customer, amount_cents, part_cost_confirmed_at, visit_bundle_selections ( title_snap, bundle_id, bundles ( pricing_kind, reference_part_cost_cents ) )",
+          "id, sort, source, description_customer, amount_cents, part_cost_confirmed_at, visit_bundle_selections ( title_snap, bundle_id, estimate_line_id, bundles ( pricing_kind, reference_part_cost_cents ) )",
         )
         .eq("invoice_id", id)
         .order("sort"),
@@ -296,6 +331,7 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
     visit_bundle_selections: {
       title_snap: string
       bundle_id: string | null
+      estimate_line_id: string | null
       bundles: { pricing_kind: string; reference_part_cost_cents: number | null } | null
     } | null
   }
@@ -353,6 +389,7 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
           receiptUrl: await receiptUrl(order?.receipt_path ?? null),
           currentCents: part ? part.amountCents : null,
           confirmed: row.part_cost_confirmed_at !== null,
+          held: Boolean(sel?.estimate_line_id),
         }
       }
       return {
@@ -448,31 +485,55 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
 
 export type EstimateReview = {
   id: string
-  status: string
+  requestId: string
+  status: EstimateStatus
+  number: string | null
+  updatedAt: string
   propertyName: string
   unitLabel: string
+  issue: string
   narrative: string
   equipmentSize: string | null
   techName: string | null
+  techFirstName: string
   dateLabel: string
-  lines: { id: string; title: string; amountCents: number }[]
+  minutes: { travel: number; access: number; work: number }
+  lines: ReviewLine[]
   subtotalCents: number
+  taxRateBps: number
   taxCents: number
   totalCents: number
+  note: string | null
+  photoCount: number
+  model: string | null
+  serial: string | null
+  sendTo: { name: string | null; email: string | null }
+  sentLabel: string | null
+  token: string | null
+  responseName: string | null
+  responseNote: string | null
+  respondedVia: "link" | "owner" | null
+  declineOutcome: "billed" | "no_charge" | null
+  invoiceId: string | null
+  board: string
+  emailStatus: "sent" | "failed" | "queued" | null
 }
 
 export async function loadEstimateReview(supabase: Supabase, id: string): Promise<EstimateReview | null> {
   const { data } = await supabase
     .from("estimates")
     .select(
-      "id, status, property_snap, unit_snap, narrative, equipment_size_text, created_by, created_at, subtotal_cents, tax_cents, total_cents",
+      "id, request_id, status, number, updated_at, property_snap, unit_snap, narrative, equipment_size_text, created_by, created_at, subtotal_cents, tax_rate_bps_snap, tax_cents, total_cents, bill_to_contact_id, bill_to_email_snap, sent_at, public_token, response_name, response_note, responded_via, decline_outcome",
     )
     .eq("id", id)
     .maybeSingle()
   if (!data) return null
   const est = data as {
     id: string
-    status: string
+    request_id: string
+    status: EstimateStatus
+    number: string | null
+    updated_at: string
     property_snap: string | null
     unit_snap: string | null
     narrative: string
@@ -480,39 +541,179 @@ export async function loadEstimateReview(supabase: Supabase, id: string): Promis
     created_by: string
     created_at: string
     subtotal_cents: number
+    tax_rate_bps_snap: number
     tax_cents: number
     total_cents: number
+    bill_to_contact_id: string | null
+    bill_to_email_snap: string | null
+    sent_at: string | null
+    public_token: string | null
+    response_name: string | null
+    response_note: string | null
+    responded_via: "link" | "owner" | null
+    decline_outcome: "billed" | "no_charge" | null
   }
-  const [linesResult, names] = await Promise.all([
+  const [linesResult, costsResult, requestResult, visitsResult, names, invoiceResult, emailResult] = await Promise.all([
     supabase
       .from("estimate_lines")
-      .select("id, source, description_customer, amount_cents, visit_bundle_selections ( title_snap )")
+      .select("id, sort, source, description_customer, amount_cents, visit_bundle_selections ( title_snap )")
       .eq("estimate_id", id)
       .order("sort"),
+    supabase
+      .from("estimate_cost_lines")
+      .select("id, estimate_line_id, sort, kind, label, amount_cents, removed")
+      .eq("estimate_id", id)
+      .order("sort"),
+    supabase
+      .from("service_requests")
+      .select("issue, board_status, contact_id, customers ( billing_email_override, billing_contact_id )")
+      .eq("id", est.request_id)
+      .maybeSingle(),
+    supabase
+      .from("service_visits")
+      .select("id, status, outcome_path, tech_note, closed_at, model_typed, serial_typed, time_segments ( kind, started_at, ended_at )")
+      .eq("request_id", est.request_id)
+      .order("visit_seq", { ascending: false }),
     crewNames(supabase),
+    supabase.from("invoice_records").select("id").eq("request_id", est.request_id).maybeSingle(),
+    supabase
+      .from("outbound_messages")
+      .select("status")
+      .eq("request_id", est.request_id)
+      .eq("template", "estimate")
+      .order("created_at", { ascending: false })
+      .limit(1),
   ])
-  type Row = TitleRow & { id: string; amount_cents: number }
+
+  type CostRow = { id: string; estimate_line_id: string; kind: CostKind; label: string; amount_cents: number; removed: boolean }
+  const costBy = new Map<string, ReviewCostLine[]>()
+  for (const c of (costsResult.data ?? []) as CostRow[]) {
+    const list = costBy.get(c.estimate_line_id) ?? []
+    list.push({ id: c.id, kind: c.kind, label: c.label, amountCents: c.amount_cents, removed: c.removed })
+    costBy.set(c.estimate_line_id, list)
+  }
+  type LineRow = TitleRow & { id: string; amount_cents: number }
+  const lines: ReviewLine[] = ((linesResult.data ?? []) as LineRow[]).map((row) => {
+    const sel = Array.isArray(row.visit_bundle_selections) ? row.visit_bundle_selections[0] : row.visit_bundle_selections
+    return {
+      id: row.id,
+      source: row.source as ReviewLine["source"],
+      title: sel?.title_snap ?? null,
+      description: row.description_customer,
+      amountCents: row.amount_cents,
+      costLines: costBy.get(row.id) ?? [],
+      partCheck: null,
+    }
+  })
+
+  type One<T> = T | T[] | null
+  const first = <T,>(v: One<T>): T | null => (Array.isArray(v) ? (v[0] ?? null) : v)
+  const request = requestResult.data as {
+    issue: string
+    board_status: string
+    contact_id: string
+    customers: One<{ billing_email_override: string | null; billing_contact_id: string | null }>
+  } | null
+
+  type VisitRow = {
+    id: string
+    status: string
+    outcome_path: string | null
+    tech_note: string | null
+    closed_at: string | null
+    model_typed: string | null
+    serial_typed: string | null
+    time_segments: { kind: string; started_at: string; ended_at: string | null }[] | null
+  }
+  const visits = (visitsResult.data ?? []) as VisitRow[]
+  const visit = visits.find((v) => v.status === "closed" && v.outcome_path === "estimate") ?? visits[0] ?? null
+  const minutes = { travel: 0, access: 0, work: 0 }
+  for (const seg of visit?.time_segments ?? []) {
+    if (!seg.ended_at) continue
+    const m = (Date.parse(seg.ended_at) - Date.parse(seg.started_at)) / 60000
+    if (seg.kind === "travel" || seg.kind === "access" || seg.kind === "work") minutes[seg.kind] += m
+  }
+  let photoCount = 0
+  if (visit) {
+    const { count } = await supabase
+      .from("attachments")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_type", "visit")
+      .eq("owner_id", visit.id)
+      .in("kind", ["photo", "nameplate"])
+    photoCount = count ?? 0
+  }
+
+  // Who it goes to: the person who called it in, else the customer's billing email.
+  let sendName: string | null = null
+  let sendEmail: string | null = est.bill_to_email_snap && est.bill_to_email_snap !== "unset" ? est.bill_to_email_snap : null
+  if (est.status === "draft" || est.status === "in_review") {
+    const contactId = est.bill_to_contact_id ?? request?.contact_id ?? null
+    const customer = first(request?.customers ?? null)
+    const ids = [contactId, customer?.billing_contact_id].filter((v): v is string => Boolean(v))
+    const { data: contacts } = ids.length
+      ? await supabase.from("customer_contacts").select("id, name, email").in("id", ids)
+      : { data: [] }
+    const byId = new Map(((contacts ?? []) as { id: string; name: string; email: string | null }[]).map((c) => [c.id, c]))
+    const caller = contactId ? byId.get(contactId) : undefined
+    const billing = customer?.billing_contact_id ? byId.get(customer.billing_contact_id) : undefined
+    sendName = caller?.email?.trim() ? caller.name : (billing?.name ?? caller?.name ?? null)
+    sendEmail =
+      caller?.email?.trim() || customer?.billing_email_override?.trim() || billing?.email?.trim() || null
+  }
+
+  const techName = names.get(est.created_by) ?? null
+  const email = ((emailResult.data ?? []) as { status: "sent" | "failed" | "queued" }[])[0]
   return {
     id: est.id,
+    requestId: est.request_id,
     status: est.status,
+    number: est.number,
+    updatedAt: est.updated_at,
     propertyName: est.property_snap ?? "Property",
     unitLabel: est.unit_snap ?? "",
+    issue: request?.issue ?? "",
     narrative: est.narrative,
     equipmentSize: est.equipment_size_text,
-    techName: names.get(est.created_by) ?? null,
-    dateLabel: dayLabel(est.created_at),
-    lines: ((linesResult.data ?? []) as Row[]).map((r) => ({ id: r.id, title: titleOf(r), amountCents: r.amount_cents })),
+    techName,
+    techFirstName: techName?.split(" ")[0] ?? "the tech",
+    dateLabel: dayLabel(visit?.closed_at ?? est.created_at),
+    minutes,
+    lines,
     subtotalCents: est.subtotal_cents,
+    taxRateBps: est.tax_rate_bps_snap,
     taxCents: est.tax_cents,
     totalCents: est.total_cents,
+    note: visit?.tech_note ?? null,
+    photoCount,
+    model: visit?.model_typed ?? null,
+    serial: visit?.serial_typed ?? null,
+    sendTo: { name: sendName, email: sendEmail },
+    sentLabel: est.sent_at ? dayLabel(est.sent_at) : null,
+    token: est.public_token,
+    responseName: est.response_name,
+    responseNote: est.response_note,
+    respondedVia: est.responded_via,
+    declineOutcome: est.decline_outcome,
+    invoiceId: (invoiceResult.data as { id: string } | null)?.id ?? null,
+    board: request?.board_status ?? "",
+    emailStatus: email?.status ?? null,
   }
 }
 
-/** For the Board's Review tab: how many drafts wait on an owner. */
+/** For the Board's Review tab: how many things wait on an owner. */
 export async function countReview(supabase: Supabase): Promise<number> {
-  const [a, b] = await Promise.all([
+  const [a, b, c] = await Promise.all([
     supabase.from("invoice_records").select("id", { count: "exact", head: true }).in("status", OPEN_INVOICE),
-    supabase.from("estimates").select("id", { count: "exact", head: true }).in("status", OPEN_ESTIMATE),
+    supabase
+      .from("estimates")
+      .select("id", { count: "exact", head: true })
+      .or(`status.in.(${OPEN_ESTIMATE.join(",")}),and(status.eq.declined,decline_settled_at.is.null)`),
+    supabase
+      .from("parts_orders")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "needed")
+      .not("owner_help_at", "is", null),
   ])
-  return (a.count ?? 0) + (b.count ?? 0)
+  return (a.count ?? 0) + (b.count ?? 0) + (c.count ?? 0)
 }
