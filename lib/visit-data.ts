@@ -72,6 +72,9 @@ export type VisitModel = {
   contactPhone: string | null
   /** Who to reach to get in: the person who called it in first, then the property's other contacts. */
   contacts: VisitContact[]
+  unitId: string
+  /** The unit's equipment on file (outdoor, indoor). Kept across visits. */
+  equipment: VisitEquipment[]
   signoff: SignoffRule
   signoffNotes: string | null
   viewerId: string
@@ -110,6 +113,16 @@ export type VisitModel = {
   estimateOverCents: number | null
   /** The viewer's next job after this one, for "Next: …" on close. */
   nextJob: { id: string; title: string } | null
+}
+
+export type VisitEquipment = {
+  id: string
+  kind: "ahu" | "condenser" | "heat_pump" | "furnace" | "thermostat" | "other"
+  brand: string | null
+  model: string | null
+  serial: string | null
+  tons: number | null
+  refrigerant: string | null
 }
 
 export type VisitContact = {
@@ -196,7 +209,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
   const unit = one(row.units)
   const contact = one(row.customer_contacts)
 
-  const [contractResult, visitsResult, partsResult, bundlesResult, linesResult, suppliersResult, linksResult] =
+  const [contractResult, visitsResult, partsResult, bundlesResult, linesResult, suppliersResult, linksResult, equipmentResult] =
     await Promise.all([
       supabase
         .from("property_contract")
@@ -230,6 +243,12 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         .from("contact_properties")
         .select("is_primary, customer_contacts ( id, name, title, phone, active )")
         .eq("property_id", row.property_id),
+      supabase
+        .from("systems")
+        .select("id, kind, brand, model, serial, tonnage, refrigerant")
+        .eq("unit_id", row.unit_id)
+        .is("retired_at", null)
+        .order("created_at"),
     ])
 
   const visits = (visitsResult.data ?? []) as VisitRow[]
@@ -332,6 +351,24 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
       contactName: contact?.name ?? "Contact",
       contactPhone: contact?.phone ?? null,
       contacts: visitContacts(row.contact_id, contact, linksResult.data),
+      unitId: row.unit_id,
+      equipment: ((equipmentResult.data ?? []) as {
+        id: string
+        kind: VisitEquipment["kind"]
+        brand: string | null
+        model: string | null
+        serial: string | null
+        tonnage: number | string | null
+        refrigerant: string | null
+      }[]).map((e) => ({
+        id: e.id,
+        kind: e.kind,
+        brand: e.brand,
+        model: e.model,
+        serial: e.serial,
+        tons: e.tonnage === null ? null : Number(e.tonnage),
+        refrigerant: e.refrigerant,
+      })),
       signoff: isSignoffRule(contract?.signoff_requirement) ? contract.signoff_requirement : "note_only",
       signoffNotes: contract?.signoff_notes ?? null,
       viewerId: viewer.id,
