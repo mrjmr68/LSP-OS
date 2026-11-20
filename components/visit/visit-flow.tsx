@@ -70,6 +70,8 @@ type Step =
   | "attempt_done"
   | "summary"
   | "readings"
+  | "photos"
+  | "note"
 
 export function VisitFlow({
   model,
@@ -132,6 +134,9 @@ function VisitSession({
   const [ownerWillFinish, setOwnerWillFinish] = useState(initial.ownerWillFinish)
   const [bundleId, setBundleId] = useState<string | null>(initial.bundleId)
   const [photos, setPhotos] = useState<string[]>(() => readVisitPhotos(model.requestId))
+  const [nameplate, setNameplate] = useState<string | null>(
+    () => readVisitPhotos(`${model.requestId}:nameplate`)[0] ?? null,
+  )
   const [query, setQuery] = useState("")
   // null = follow the suggestion; true/false = the tech switched it.
   const [estimateChoice, setEstimateChoice] = useState<boolean | null>(null)
@@ -444,7 +449,6 @@ function VisitSession({
 
   async function addRepair(bundle: VisitBundle) {
     if (picks.some((p) => p.bundleId === bundle.id)) {
-      setStep("close")
       return
     }
     setBusy(true)
@@ -485,7 +489,7 @@ function VisitSession({
     setBundleId(bundle.id)
     setQuery("")
     setPath((current) => (current === "one_off" ? null : current))
-    setStep("close")
+    setStep("bundle")
     if (result !== "queued") {
       router.refresh()
     }
@@ -787,13 +791,42 @@ function VisitSession({
       )
     : quick
   const total = picks.reduce((sum, p) => sum + p.priceCents, 0)
-  const context = `${model.propertyName} · ${model.unitLabel} · ${model.issue}`
   const isHub = step === "arrival" || step === "bundle" || step === "diagnose"
+  // On site: the tool tabs in the header and the Wrap up bar at the bottom.
+  const onSiteTab: OnSiteTab | null = !mine
+    ? null
+    : isHub
+      ? "repairs"
+      : step === "readings" || step === "photos" || step === "note"
+        ? step
+        : null
+  const showTabs = onSiteTab !== null || (mine && step === "close")
   const addingAnother = picks.length > 0
 
   // One primary action per screen, pinned to the bottom.
   let primary: React.ReactNode = null
-  if (step === "before" && mine && (model.boardStatus === "assigned" || model.boardStatus === "ready")) {
+  if (onSiteTab !== null) {
+    primary = (
+      <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="text-sm text-muted-foreground">
+            {picks.length === 0 ? "No repair yet" : `${picks.length} repair${picks.length === 1 ? "" : "s"}`}
+          </span>
+          <span className="text-[22px] leading-tight font-extrabold tabular-nums">
+            {picks.length === 0 ? "—" : formatDollars(pickTotal).replace(".00", "")}
+          </span>
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setStep("close")}
+          className="h-[58px] flex-[1.4] rounded-[14px] bg-primary text-[19px] font-extrabold text-primary-foreground disabled:opacity-60"
+        >
+          Wrap up →
+        </button>
+      </div>
+    )
+  } else if (step === "before" && mine && (model.boardStatus === "assigned" || model.boardStatus === "ready")) {
     primary = (
       <>
         <BigButton disabled={busy} onClick={() => void onTheWay()}>
@@ -840,22 +873,28 @@ function VisitSession({
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-md flex-col">
-      <header className="flex items-center justify-between gap-3 px-5 pt-4">
-        <button type="button" onClick={goBoard} className="flex min-h-11 items-center text-[15px] font-semibold text-muted-foreground">
-          ← My jobs
-        </button>
-        <span
-          role="status"
-          className={
-            "rounded-full px-2.5 py-1 text-[13px] font-bold " +
-            (sync.tone === "synced" ? "bg-busy text-busy-foreground" : "bg-free text-free-foreground")
-          }
-        >
-          {sync.label}
-        </span>
-      </header>
+      <JobHeader
+        model={model}
+        sync={sync}
+        stage={stageLabel(step, mine)}
+        onBack={goBoard}
+        tabs={
+          showTabs ? (
+            <OnSiteTabs
+              active={onSiteTab}
+              counts={{
+                repairs: picks.length,
+                readings: readingsCount(readings),
+                photos: photos.length,
+                note: note.trim() ? 1 : 0,
+              }}
+              onPick={(tab) => setStep(tab === "repairs" ? (picks.length > 0 ? "bundle" : "diagnose") : tab)}
+            />
+          ) : null
+        }
+      />
 
-      <main className={"flex flex-1 flex-col gap-3 px-5 pt-2 " + (primary ? "pb-52" : "pb-10")}>
+      <main className={"flex flex-1 flex-col gap-3 px-5 pt-4 " + (primary ? "pb-52" : "pb-10")}>
         {conflict ? (
           <p role="alert" className="rounded-xl bg-free px-4 py-3 text-sm leading-6 text-free-foreground">
             The Board changed this call while this phone was offline. The Board stands. Tell an owner what you saved here.
@@ -871,12 +910,6 @@ function VisitSession({
         {/* ---------------- Heading there ---------------- */}
         {step === "before" || step === "summary" ? (
           <>
-            <Eyebrow>{step === "before" && mine ? "Next stop" : "Job"}</Eyebrow>
-            <div>
-              <h1 className="text-[32px] leading-tight font-extrabold">{model.propertyName}</h1>
-              <p className="text-2xl font-bold">Unit {model.unitLabel}</p>
-              <p className="text-lg text-muted-foreground">{model.issue}</p>
-            </div>
             {model.repeat ? (
               <p className="rounded-xl bg-free px-4 py-3 text-[15px] font-bold text-free-foreground">
                 {ordinal(model.repeat.count + 1)} call on this unit in {model.repeat.windowDays} days
@@ -894,12 +927,6 @@ function VisitSession({
         {/* ---------------- Driving ---------------- */}
         {step === "en_route" ? (
           <>
-            <Eyebrow>Driving to</Eyebrow>
-            <div>
-              <h1 className="text-[32px] leading-tight font-extrabold">{model.propertyName}</h1>
-              <p className="text-2xl font-bold">Unit {model.unitLabel}</p>
-              <p className="text-lg text-muted-foreground">{model.issue}</p>
-            </div>
             <GettingIn model={model} />
             <button type="button" onClick={() => openMapsTab(mapsDirectionsUrl(model.address, null))} className="min-h-11 self-start text-[15px] font-semibold text-primary underline">
               Open directions again
@@ -913,11 +940,25 @@ function VisitSession({
         {/* ---------------- What did you find? ---------------- */}
         {isHub && mine ? (
           <>
-            <p className="text-sm font-semibold text-muted-foreground">{context}</p>
-            <h1 className="text-[30px] leading-tight font-extrabold">
-              {addingAnother ? "Add another repair" : "What did you find?"}
-            </h1>
-            <Eyebrow>Search repairs</Eyebrow>
+            {picks.length > 0 ? (
+              <section className="flex flex-col gap-1.5 rounded-xl border border-border bg-card px-4 py-3">
+                <Eyebrow>On this visit</Eyebrow>
+                {picks.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between gap-3">
+                    <span className="text-[17px] font-bold">{p.title}</span>
+                    <span className="flex items-center gap-1">
+                      <span className="text-[17px] font-bold tabular-nums">{formatDollars(p.priceCents).replace(".00", "")}</span>
+                      <button type="button" disabled={busy} data-pick={p.id} onClick={onRemoveClick} aria-label={`Remove ${p.title}`} className="flex size-9 items-center justify-center rounded-lg text-xl text-muted-foreground hover:bg-muted">
+                        ×
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </section>
+            ) : (
+              <h1 className="text-[26px] leading-tight font-extrabold">What did you find?</h1>
+            )}
+            <Eyebrow>{addingAnother ? "Add another repair" : "Search repairs"}</Eyebrow>
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -956,9 +997,6 @@ function VisitSession({
               </ul>
             )}
             <div className="mt-1 flex flex-col items-start gap-1">
-              <QuietLink onClick={() => setStep("readings")}>
-                {readingsCount(readings) > 0 ? `Readings · ${readingsCount(readings)} taken` : "Take readings"}
-              </QuietLink>
               <QuietLink
                 onClick={() => {
                   setPath("one_off")
@@ -967,9 +1005,7 @@ function VisitSession({
               >
                 No repair fits? Describe it
               </QuietLink>
-              {addingAnother ? (
-                <QuietLink onClick={() => setStep("close")}>Back to close</QuietLink>
-              ) : (
+              {addingAnother ? null : (
                 <QuietLink onClick={() => { setAttemptReason("no_access"); setAttemptOpen(true) }}>
                   Couldn&apos;t get in
                 </QuietLink>
@@ -981,9 +1017,7 @@ function VisitSession({
         {/* ---------------- Readings (its own screen) ---------------- */}
         {step === "readings" ? (
           <section className="flex flex-col gap-3">
-            <p className="text-sm font-semibold text-muted-foreground">{context}</p>
-            <h1 className="text-[30px] leading-tight font-extrabold">Readings</h1>
-            <p className="text-[15px] text-muted-foreground">Take what you can. Any can be left blank.</p>
+            <p className="text-[15px] text-muted-foreground">Saved as you type. Any can be left blank.</p>
             <div className="grid grid-cols-2 gap-3">
               {READING_FIELDS.map((field) => (
                 <label key={field.key} className="flex flex-col gap-1">
@@ -1000,7 +1034,55 @@ function VisitSession({
                 </label>
               ))}
             </div>
-            <BigButton onClick={() => setStep(picks.length > 0 ? "close" : "bundle")}>Done</BigButton>
+          </section>
+        ) : null}
+
+        {/* ---------------- Photos tab ---------------- */}
+        {step === "photos" ? (
+          <section className="flex flex-col gap-3">
+            <p className="text-[15px] text-muted-foreground">Photos stay on this phone until it syncs.</p>
+            {photos.length > 0 ? (
+              <div className="grid grid-cols-3 gap-2">
+                {photos.map((url, index) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={index} src={url} alt={`Photo ${index + 1}`} className="aspect-square w-full rounded-lg object-cover" />
+                ))}
+              </div>
+            ) : null}
+            <PhotoButton
+              label={photos.length > 0 ? `${photos.length} photo${photos.length === 1 ? "" : "s"} · add another` : "Take a photo"}
+              onFile={(file) =>
+                void shrinkPhoto(file).then((url) => {
+                  if (url) void addPhoto(model.requestId, url, "photo", photos, setPhotos, setFormError)
+                })
+              }
+            />
+            <PhotoButton
+              label={nameplate ? "Nameplate photo ✓ · retake" : "Nameplate photo"}
+              onFile={(file) =>
+                void shrinkPhoto(file).then((url) => {
+                  if (url) {
+                    void addPhoto(model.requestId, url, "nameplate", photos, setPhotos, setFormError)
+                    setNameplate(url)
+                  }
+                })
+              }
+            />
+          </section>
+        ) : null}
+
+        {/* ---------------- Note tab ---------------- */}
+        {step === "note" ? (
+          <section className="flex flex-col gap-3">
+            <p className="text-[15px] text-muted-foreground">
+              For the owners, not the property. Type, or tap the mic on your keyboard to talk.
+            </p>
+            <textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              className={fieldClass + " min-h-48"}
+              aria-label="Note"
+            />
           </section>
         ) : null}
 
@@ -1047,8 +1129,7 @@ function VisitSession({
         {/* ---------------- Ready to close? ---------------- */}
         {step === "close" ? (
           <>
-            <p className="text-sm font-semibold text-muted-foreground">{context}</p>
-            <h1 className="text-[30px] leading-tight font-extrabold">Ready to close?</h1>
+            <h1 className="text-[28px] leading-tight font-extrabold">Ready to close?</h1>
             <section className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
               <Eyebrow>{closePath === "estimate" ? "On the estimate" : "Repairs on this visit"}</Eyebrow>
               {picks.length === 0 ? (
@@ -1099,7 +1180,7 @@ function VisitSession({
                   </Field>
                 ) : null}
                 <label className="flex h-12 cursor-pointer items-center justify-center rounded-xl border-2 border-ink bg-card text-[17px] font-bold">
-                  {readVisitPhotos(`${model.requestId}:nameplate`).length > 0 ? "Nameplate photo ✓ · retake" : "Nameplate photo"}
+                  {nameplate ? "Nameplate photo ✓ · retake" : "Nameplate photo"}
                   <input
                     type="file"
                     accept="image/*"
@@ -1109,7 +1190,10 @@ function VisitSession({
                       const file = event.target.files?.[0]
                       if (file) {
                         void shrinkPhoto(file).then((url) => {
-                          if (url) void addPhoto(model.requestId, url, "nameplate", photos, setPhotos, setFormError)
+                          if (url) {
+                            void addPhoto(model.requestId, url, "nameplate", photos, setPhotos, setFormError)
+                            setNameplate(url)
+                          }
                         })
                       }
                     }}
@@ -1273,6 +1357,121 @@ function VisitSession({
 
 const fieldClass =
   "min-h-24 w-full rounded-xl border-2 border-ink/80 bg-card px-3 py-3 text-base outline-none focus-visible:border-primary"
+
+type OnSiteTab = "repairs" | "readings" | "photos" | "note"
+
+function stageLabel(step: Step, mine: boolean): string {
+  if (step === "before") return mine ? "Next stop" : "Job"
+  if (step === "summary") return "Job"
+  if (step === "en_route") return "Driving"
+  if (step === "close") return "Wrapping up"
+  if (step === "done") return "Closed"
+  if (step === "attempt_done") return "Couldn't get in"
+  if (step === "parts_desk") return "Parts"
+  return "On site"
+}
+
+/** The same header on every job screen: where you are and what stage. */
+function JobHeader({
+  model,
+  sync,
+  stage,
+  onBack,
+  tabs,
+}: {
+  model: VisitModel
+  sync: { label: string; tone: string }
+  stage: string
+  onBack: () => void
+  tabs: React.ReactNode
+}) {
+  return (
+    <header className="sticky top-0 z-20 flex flex-col gap-2 bg-ink px-5 pt-3 pb-3 text-ink-foreground">
+      <div className="flex items-center justify-between gap-3">
+        <button type="button" onClick={onBack} className="flex min-h-11 items-center text-[15px] font-semibold text-ink-foreground/80">
+          ← My jobs
+        </button>
+        <span className="flex items-center gap-2">
+          <span className="text-[13px] font-bold tracking-[0.06em] text-ink-foreground/70 uppercase">{stage}</span>
+          <span
+            role="status"
+            className={
+              "rounded-full px-2.5 py-1 text-[13px] font-bold " +
+              (sync.tone === "synced" ? "bg-busy text-busy-foreground" : "bg-free text-free-foreground")
+            }
+          >
+            {sync.label}
+          </span>
+        </span>
+      </div>
+      <div>
+        <p className="text-[26px] leading-tight font-extrabold">
+          {model.propertyName} · Unit {model.unitLabel}
+        </p>
+        <p className="text-[15px] text-ink-foreground/75">{model.issue}</p>
+      </div>
+      {tabs}
+    </header>
+  )
+}
+
+function OnSiteTabs({
+  active,
+  counts,
+  onPick,
+}: {
+  active: OnSiteTab | null
+  counts: Record<OnSiteTab, number>
+  onPick: (tab: OnSiteTab) => void
+}) {
+  const tabs: { id: OnSiteTab; label: string; count: string | null }[] = [
+    { id: "repairs", label: "Repairs", count: counts.repairs ? String(counts.repairs) : null },
+    { id: "readings", label: "Readings", count: counts.readings ? String(counts.readings) : null },
+    { id: "photos", label: "Photos", count: counts.photos ? String(counts.photos) : null },
+    { id: "note", label: "Note", count: counts.note ? "✓" : null },
+  ]
+  return (
+    <nav aria-label="Visit tools" className="mt-1 flex gap-1 rounded-xl bg-white/10 p-1">
+      {tabs.map((tab) => {
+        const on = tab.id === active
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            aria-current={on ? "page" : undefined}
+            onClick={() => onPick(tab.id)}
+            className={
+              "flex h-10 min-w-0 flex-1 items-center justify-center gap-1 rounded-[9px] px-1 text-[13px] font-extrabold " +
+              (on ? "bg-card text-foreground" : "text-ink-foreground/85")
+            }
+          >
+            <span className="truncate">{tab.label}</span>
+            {tab.count ? <span className="font-semibold opacity-70">{tab.count}</span> : null}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function PhotoButton({ label, onFile }: { label: string; onFile: (file: File) => void }) {
+  return (
+    <label className="flex h-14 cursor-pointer items-center justify-center rounded-xl border-2 border-ink bg-card text-[17px] font-bold">
+      {label}
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="sr-only"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) onFile(file)
+          event.target.value = ""
+        }}
+      />
+    </label>
+  )
+}
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return <p className="text-[13px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{children}</p>
