@@ -19,12 +19,14 @@ import {
   type VisitStep,
 } from "@/app/actions/visit"
 import { Sheet } from "@/components/board/sheet"
+import { UnitEquipment } from "@/components/visit/unit-equipment"
 import { useVisitFlush } from "@/components/visit/visit-sync"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { mapsDirectionsUrl, runGoEnRoute } from "@/lib/board-rules"
 import { fixNow, locationState, onFix, startLocation } from "@/lib/location"
+import { equipmentLabel } from "@/lib/nameplate"
 import type { VisitBundle, VisitModel, VisitPart, VisitSelection, VisitSupplier } from "@/lib/visit-data"
 import {
   ATTEMPT_REASONS,
@@ -72,6 +74,7 @@ type Step =
   | "readings"
   | "photos"
   | "note"
+  | "unit"
 
 export function VisitFlow({
   model,
@@ -781,7 +784,6 @@ function VisitSession({
     router.refresh()
   }
 
-  const quick = bundles.filter((bundle) => bundle.quickSelectRank !== null).slice(0, 4)
   const needle = query.trim().toLowerCase()
   const results = needle
     ? bundles.filter((bundle) =>
@@ -789,7 +791,7 @@ function VisitSession({
           .toLowerCase()
           .includes(needle),
       )
-    : quick
+    : []
   const total = picks.reduce((sum, p) => sum + p.priceCents, 0)
   const isHub = step === "arrival" || step === "bundle" || step === "diagnose"
   // On site: the tool tabs in the header and the Wrap up bar at the bottom.
@@ -797,7 +799,7 @@ function VisitSession({
     ? null
     : isHub
       ? "repairs"
-      : step === "readings" || step === "photos" || step === "note"
+      : step === "readings" || step === "photos" || step === "note" || step === "unit"
         ? step
         : null
   const showTabs = onSiteTab !== null || (mine && step === "close")
@@ -884,6 +886,7 @@ function VisitSession({
               active={onSiteTab}
               counts={{
                 repairs: picks.length,
+                unit: model.equipment.some((e) => e.model || e.serial) ? 1 : 0,
                 readings: readingsCount(readings),
                 photos: photos.length,
                 note: note.trim() ? 1 : 0,
@@ -910,6 +913,7 @@ function VisitSession({
         {/* ---------------- Heading there ---------------- */}
         {step === "before" || step === "summary" ? (
           <>
+            <p className="text-[19px] leading-snug font-semibold">{model.issue}</p>
             {model.repeat ? (
               <p className="rounded-xl bg-free px-4 py-3 text-[15px] font-bold text-free-foreground">
                 {ordinal(model.repeat.count + 1)} call on this unit in {model.repeat.windowDays} days
@@ -927,6 +931,7 @@ function VisitSession({
         {/* ---------------- Driving ---------------- */}
         {step === "en_route" ? (
           <>
+            <p className="text-[19px] leading-snug font-semibold">{model.issue}</p>
             <GettingIn model={model} />
             <button type="button" onClick={() => openMapsTab(mapsDirectionsUrl(model.address, null))} className="min-h-11 self-start text-[15px] font-semibold text-primary underline">
               Open directions again
@@ -955,63 +960,87 @@ function VisitSession({
                   </div>
                 ))}
               </section>
-            ) : (
-              <h1 className="text-[26px] leading-tight font-extrabold">What did you find?</h1>
-            )}
-            <Eyebrow>{addingAnother ? "Add another repair" : "Search repairs"}</Eyebrow>
+            ) : null}
+            <label htmlFor="repair-search" className="text-[13px] font-bold tracking-[0.08em] text-muted-foreground uppercase">
+              {addingAnother ? "Add another repair" : "Search repairs"}
+            </label>
             <Input
+              id="repair-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="capacitor, drain, contactor…"
-              aria-label="Search repairs"
+              placeholder="capacitor, drain, no issue…"
               className="h-14 rounded-xl border-2 border-ink text-lg"
             />
-            <Eyebrow>{needle ? `${results.length} match${results.length === 1 ? "" : "es"}` : "Most common"}</Eyebrow>
-            {results.length === 0 ? (
-              <p className="text-[15px] text-muted-foreground">Nothing matches. Try another word, or use One-off below.</p>
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {results.map((bundle) => {
-                  const already = picks.some((p) => p.bundleId === bundle.id)
-                  return (
-                    <li key={bundle.id}>
-                      <button
-                        type="button"
-                        disabled={busy || already}
-                        onClick={() => void addRepair(bundle)}
-                        className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left disabled:opacity-60"
-                      >
-                        <span>
-                          <span className="block text-[17px] font-bold">{bundle.title}</span>
-                          {bundle.oneShot ? (
-                            <span className="block text-[13px] text-muted-foreground">Needs a part and a return trip</span>
-                          ) : already ? (
-                            <span className="block text-[13px] text-muted-foreground">On this visit</span>
-                          ) : null}
-                        </span>
-                        <span className="text-[17px] font-bold tabular-nums">{formatDollars(bundle.priceCents).replace(".00", "")}</span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-            <div className="mt-1 flex flex-col items-start gap-1">
-              <QuietLink
+            {needle ? (
+              results.length === 0 ? (
+                <p className="text-[15px] text-muted-foreground">Nothing matches. Try another word, or use New repair.</p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {results.map((bundle) => {
+                    const already = picks.some((p) => p.bundleId === bundle.id)
+                    return (
+                      <li key={bundle.id}>
+                        <button
+                          type="button"
+                          disabled={busy || already}
+                          onClick={() => void addRepair(bundle)}
+                          className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left disabled:opacity-60"
+                        >
+                          <span>
+                            <span className="block text-[17px] font-bold">{bundle.title}</span>
+                            {bundle.oneShot ? (
+                              <span className="block text-[13px] text-muted-foreground">Needs a part and a return trip</span>
+                            ) : already ? (
+                              <span className="block text-[13px] text-muted-foreground">On this visit</span>
+                            ) : null}
+                          </span>
+                          <span className="text-[17px] font-bold tabular-nums">{formatDollars(bundle.priceCents).replace(".00", "")}</span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )
+            ) : null}
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={busy}
                 onClick={() => {
                   setPath("one_off")
                   void ensureWorking().then((ok) => ok && setStep("close"))
                 }}
+                className="h-14 rounded-xl border-2 border-ink bg-card text-[17px] font-bold disabled:opacity-60"
               >
-                No repair fits? Describe it
-              </QuietLink>
+                New repair
+              </button>
               {addingAnother ? null : (
-                <QuietLink onClick={() => { setAttemptReason("no_access"); setAttemptOpen(true) }}>
-                  Couldn&apos;t get in
-                </QuietLink>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setAttemptReason("no_access")
+                    setAttemptOpen(true)
+                  }}
+                  className="h-14 rounded-xl border-2 border-ink bg-card text-[17px] font-bold disabled:opacity-60"
+                >
+                  No access
+                </button>
               )}
             </div>
           </>
+        ) : null}
+
+        {/* ---------------- Unit tab: the unit's equipment ---------------- */}
+        {step === "unit" ? (
+          <UnitEquipment
+            unitId={model.unitId}
+            equipment={model.equipment}
+            onNameplatePhoto={(url) => {
+              void addPhoto(model.requestId, url, "nameplate", photos, setPhotos, setFormError)
+              setNameplate(url)
+            }}
+          />
         ) : null}
 
         {/* ---------------- Readings (its own screen) ---------------- */}
@@ -1165,6 +1194,27 @@ function VisitSession({
                 </Eyebrow>
                 {partRepairs.length > 0 && !asEstimate ? (
                   <p className="text-[15px] font-semibold">{partText}</p>
+                ) : null}
+                {model.equipment.filter((e) => e.model || e.serial).length > 0 ? (
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[13px] font-semibold text-muted-foreground">From this unit</span>
+                    {model.equipment
+                      .filter((e) => e.model || e.serial)
+                      .map((e) => (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => {
+                            setModelText(e.model ?? "")
+                            setSerial(e.serial ?? "")
+                          }}
+                          className="flex min-h-11 items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3 text-left text-[14px]"
+                        >
+                          <span className="font-bold">{e.kind === "condenser" || e.kind === "heat_pump" ? "Outdoor" : "Indoor"}</span>
+                          <span className="truncate tabular-nums">{equipmentLabel(e)}</span>
+                        </button>
+                      ))}
+                  </div>
                 ) : null}
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="Model">
@@ -1358,7 +1408,7 @@ function VisitSession({
 const fieldClass =
   "min-h-24 w-full rounded-xl border-2 border-ink/80 bg-card px-3 py-3 text-base outline-none focus-visible:border-primary"
 
-type OnSiteTab = "repairs" | "readings" | "photos" | "note"
+type OnSiteTab = "repairs" | "unit" | "readings" | "photos" | "note"
 
 function stageLabel(step: Step, mine: boolean): string {
   if (step === "before") return mine ? "Next stop" : "Job"
@@ -1405,10 +1455,12 @@ function JobHeader({
         </span>
       </div>
       <div>
-        <p className="text-[26px] leading-tight font-extrabold">
-          {model.propertyName} · Unit {model.unitLabel}
+        {/* Always two lines: the property, then the unit (never cut) and the issue. */}
+        <p className="truncate text-[22px] leading-tight font-extrabold">{model.propertyName}</p>
+        <p className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-[22px] leading-tight font-extrabold">Unit {model.unitLabel}</span>
+          <span className="truncate text-[15px] text-ink-foreground/75">{model.issue}</span>
         </p>
-        <p className="text-[15px] text-ink-foreground/75">{model.issue}</p>
       </div>
       {tabs}
     </header>
@@ -1424,11 +1476,12 @@ function OnSiteTabs({
   counts: Record<OnSiteTab, number>
   onPick: (tab: OnSiteTab) => void
 }) {
-  const tabs: { id: OnSiteTab; label: string; count: string | null }[] = [
-    { id: "repairs", label: "Repairs", count: counts.repairs ? String(counts.repairs) : null },
-    { id: "readings", label: "Readings", count: counts.readings ? String(counts.readings) : null },
-    { id: "photos", label: "Photos", count: counts.photos ? String(counts.photos) : null },
-    { id: "note", label: "Note", count: counts.note ? "✓" : null },
+  const tabs: { id: OnSiteTab; label: string; count: string | null; filled: boolean }[] = [
+    { id: "repairs", label: "Repairs", count: counts.repairs ? String(counts.repairs) : null, filled: counts.repairs > 0 },
+    { id: "unit", label: "Unit", count: null, filled: counts.unit > 0 },
+    { id: "readings", label: "Readings", count: null, filled: counts.readings > 0 },
+    { id: "photos", label: "Photos", count: null, filled: counts.photos > 0 },
+    { id: "note", label: "Note", count: null, filled: counts.note > 0 },
   ]
   return (
     <nav aria-label="Visit tools" className="mt-1 flex gap-1 rounded-xl bg-white/10 p-1">
@@ -1441,12 +1494,15 @@ function OnSiteTabs({
             aria-current={on ? "page" : undefined}
             onClick={() => onPick(tab.id)}
             className={
-              "flex h-10 min-w-0 flex-1 items-center justify-center gap-1 rounded-[9px] px-1 text-[13px] font-extrabold " +
+              "relative flex h-10 min-w-0 flex-1 items-center justify-center gap-1 rounded-[9px] px-0.5 text-[13px] font-extrabold " +
               (on ? "bg-card text-foreground" : "text-ink-foreground/85")
             }
           >
             <span className="truncate">{tab.label}</span>
             {tab.count ? <span className="font-semibold opacity-70">{tab.count}</span> : null}
+            {tab.filled && !tab.count ? (
+              <span aria-label="has something" className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-synced" />
+            ) : null}
           </button>
         )
       })}
@@ -1493,14 +1549,6 @@ function BigButton({
       onClick={onClick}
       className="h-[72px] w-full rounded-2xl bg-primary text-2xl font-bold text-primary-foreground disabled:opacity-50"
     >
-      {children}
-    </button>
-  )
-}
-
-function QuietLink({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="min-h-11 text-[15px] font-semibold text-primary underline">
       {children}
     </button>
   )
