@@ -255,7 +255,9 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
     await Promise.all([
       supabase
         .from("invoice_lines")
-        .select("id, sort, source, description_customer, amount_cents, visit_bundle_selections ( title_snap )")
+        .select(
+          "id, sort, source, description_customer, amount_cents, part_cost_confirmed_at, visit_bundle_selections ( title_snap, bundle_id, bundles ( pricing_kind, reference_part_cost_cents ) )",
+        )
         .eq("invoice_id", id)
         .order("sort"),
       supabase
@@ -284,7 +286,19 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
         .limit(1),
     ])
 
-  type LineRow = TitleRow & { id: string; sort: number; amount_cents: number }
+  type LineRow = {
+    id: string
+    sort: number
+    source: string
+    description_customer: string
+    amount_cents: number
+    part_cost_confirmed_at: string | null
+    visit_bundle_selections: {
+      title_snap: string
+      bundle_id: string | null
+      bundles: { pricing_kind: string; reference_part_cost_cents: number | null } | null
+    } | null
+  }
   type CostRow = {
     id: string
     invoice_line_id: string
@@ -300,17 +314,58 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
     list.push({ id: c.id, kind: c.kind, label: c.label, amountCents: c.amount_cents, removed: c.removed })
     costBy.set(c.invoice_line_id, list)
   }
-  const lines: ReviewLine[] = ((linesResult.data ?? []) as LineRow[]).map((row) => {
-    const sel = Array.isArray(row.visit_bundle_selections) ? row.visit_bundle_selections[0] : row.visit_bundle_selections
-    return {
-      id: row.id,
-      source: row.source as ReviewLine["source"],
-      title: sel?.title_snap ?? null,
-      description: row.description_customer,
-      amountCents: row.amount_cents,
-      costLines: costBy.get(row.id) ?? [],
-    }
-  })
+  // Part orders on this job, by the repair they were for, with a link to the receipt.
+  const { data: orderData } = await supabase
+    .from("parts_orders")
+    .select("quoted_cost_cents, actual_cost_cents, receipt_path, status, visit_bundle_selections ( bundle_id )")
+    .eq("request_id", inv.request_id)
+    .neq("status", "cancelled")
+  type OrderRow = {
+    quoted_cost_cents: number | null
+    actual_cost_cents: number | null
+    receipt_path: string | null
+    visit_bundle_selections: { bundle_id: string | null } | { bundle_id: string | null }[] | null
+  }
+  const orders = new Map<string, OrderRow>()
+  for (const o of (orderData ?? []) as OrderRow[]) {
+    const sel = Array.isArray(o.visit_bundle_selections) ? o.visit_bundle_selections[0] : o.visit_bundle_selections
+    if (sel?.bundle_id) orders.set(sel.bundle_id, o)
+  }
+  async function receiptUrl(path: string | null): Promise<string | null> {
+    if (!path) return null
+    const { data } = await supabase.storage.from("receipts").createSignedUrl(path, 3600)
+    return data?.signedUrl ?? null
+  }
+
+  const lines: ReviewLine[] = await Promise.all(
+    ((linesResult.data ?? []) as unknown as LineRow[]).map(async (row) => {
+      const sel = Array.isArray(row.visit_bundle_selections) ? row.visit_bundle_selections[0] : row.visit_bundle_selections
+      const bundle = Array.isArray(sel?.bundles) ? sel?.bundles[0] : sel?.bundles
+      const costLines = costBy.get(row.id) ?? []
+      let partCheck: ReviewLine["partCheck"] = null
+      if (bundle?.pricing_kind === "variable") {
+        const order = sel?.bundle_id ? orders.get(sel.bundle_id) : undefined
+        const part = costLines.find((c) => c.kind === "part" || c.kind === "equipment")
+        partCheck = {
+          referenceCents: bundle.reference_part_cost_cents,
+          quotedCents: order?.quoted_cost_cents ?? null,
+          actualCents: order?.actual_cost_cents ?? null,
+          receiptUrl: await receiptUrl(order?.receipt_path ?? null),
+          currentCents: part ? part.amountCents : null,
+          confirmed: row.part_cost_confirmed_at !== null,
+        }
+      }
+      return {
+        id: row.id,
+        source: row.source as ReviewLine["source"],
+        title: sel?.title_snap ?? null,
+        description: row.description_customer,
+        amountCents: row.amount_cents,
+        costLines,
+        partCheck,
+      }
+    }),
+  )
 
   const request = requestResult.data as { issue: string; assigned_user_id: string | null } | null
   type VisitRow = {

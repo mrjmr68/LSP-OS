@@ -14,6 +14,7 @@ test("reads a clean reply", () => {
     serial: "1712345678",
     tons: 3,
     refrigerant: "R-410A",
+    year: null,
     confidence: "high",
   })
 })
@@ -51,4 +52,22 @@ test("brand and refrigerant from plate text", async () => {
   assert.equal(matchRefrigerant("HFC-410A"), "R-410A")
   assert.equal(matchRefrigerant("r-454b"), "R-454B")
   assert.equal(matchRefrigerant("R-12"), "R-12")
+})
+
+test("age check: 10+ years or R-22", async () => {
+  const { ageCheck, isSealedSystemRepair } = await import("./nameplate")
+  const now = new Date("2026-11-20T12:00:00Z")
+  assert.equal(ageCheck([{ year: 2017, refrigerant: "R-410A" }], now), null)
+  assert.equal(ageCheck([{ year: 2016, refrigerant: "R-410A" }], now), "This system is 10 years old (made 2016).")
+  assert.equal(ageCheck([{ year: null, refrigerant: "R22" }], now), "This system runs on R-22.")
+  assert.equal(ageCheck([{ year: null, refrigerant: null }], now), null)
+  assert.equal(isSealedSystemRepair("AHU - Evap Coil - Replace"), true)
+  assert.equal(isSealedSystemRepair("CU - Compressor - Replace"), true)
+  assert.equal(isSealedSystemRepair("AHU - Motor - Replace - Forward"), false)
+})
+
+test("scan reads a printed manufacture year", () => {
+  const f = parseNameplateReply('{"model":"GSX140361","serial":"1712345678","year":2017,"confidence":"high"}')
+  assert.equal(f?.year, 2017)
+  assert.equal(parseNameplateReply('{"model":"GSX140361","serial":"1712345678","year":1890}')?.year, null)
 })

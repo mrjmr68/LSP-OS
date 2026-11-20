@@ -8,6 +8,7 @@ import {
   BRAND_GROUPS,
   REFRIGERANT_OPTIONS,
   TON_OPTIONS,
+  yearOptions,
   matchBrand,
   matchRefrigerant,
 } from "@/lib/nameplate"
@@ -43,6 +44,7 @@ function formFor(side: Side, existing: VisitEquipment | undefined): Form {
     serial: existing?.serial ?? "",
     tons: existing?.tons ? String(existing.tons) : "",
     refrigerant: existing?.refrigerant ?? "",
+    year: existing?.year ? String(existing.year) : "",
   }
 }
 
@@ -114,6 +116,7 @@ function EquipmentCard({
         serial: v.serial ?? f.serial,
         tons: v.tons ? String(v.tons) : f.tons,
         refrigerant: matchRefrigerant(v.refrigerant) ?? f.refrigerant,
+        year: v.year ? String(v.year) : f.year,
       }))
       setNotice(
         v.confidence === "low"
@@ -211,6 +214,19 @@ function EquipmentCard({
             <option value="Other">Other</option>
             {form.brand && !brandListed(form.brand) ? <option value={form.brand}>{form.brand}</option> : null}
           </optgroup>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor={id("year")} className="text-[15px] font-semibold">
+          Year made
+        </label>
+        <select id={id("year")} value={form.year} onChange={(e) => set("year", e.target.value)} className={pick}>
+          <option value="">Not known</option>
+          {yearOptions().map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
         </select>
       </div>
       <div className="grid grid-cols-2 gap-2">

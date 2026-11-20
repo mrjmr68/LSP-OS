@@ -49,6 +49,13 @@ export type VisitPart = {
   orderNumber: string
   expectedDelivery: string | null
   status: string
+  partNumber: string
+  quotedCents: number | null
+  actualCents: number | null
+  hasReceipt: boolean
+  /** The repair it's for is priced on the real part cost; In hand needs the cost and a receipt. */
+  variable: boolean
+  repairTitle: string | null
 }
 
 export type VisitModel = {
@@ -93,6 +100,8 @@ export type VisitModel = {
     hasSignature: boolean
     syncState: "synced" | "pending"
     offlineConflict: boolean
+    /** A return trip to install a part ordered on an earlier visit. */
+    isReturn: boolean
   } | null
   selection: {
     bundleId: string | null
@@ -123,6 +132,7 @@ export type VisitEquipment = {
   serial: string | null
   tons: number | null
   refrigerant: string | null
+  year: number | null
 }
 
 export type VisitContact = {
@@ -219,14 +229,14 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
       supabase
         .from("service_visits")
         .select(
-          "id, status, outcome_path, tech_note, model_typed, serial_typed, equipment_size_text, readings, signoff_name, signoff_signature_attachment_id, sync_state, offline_conflict, visit_seq",
+          "id, status, outcome_path, tech_note, model_typed, serial_typed, equipment_size_text, readings, signoff_name, signoff_signature_attachment_id, sync_state, offline_conflict, visit_seq, visit_type",
         )
         .eq("request_id", requestId)
         .order("visit_seq", { ascending: false }),
       supabase
         .from("parts_orders")
         .select(
-          "id, part_description, supplier_id, supplier_contact_text, order_number, expected_delivery_date, status, suppliers ( name, phone, email )",
+          "id, part_description, supplier_id, supplier_contact_text, order_number, expected_delivery_date, status, part_number, quoted_cost_cents, actual_cost_cents, receipt_path, suppliers ( name, phone, email ), visit_bundle_selections ( title_snap, bundles ( pricing_kind ) )",
         )
         .eq("request_id", requestId)
         .neq("status", "cancelled"),
@@ -245,7 +255,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         .eq("property_id", row.property_id),
       supabase
         .from("systems")
-        .select("id, kind, brand, model, serial, tonnage, refrigerant")
+        .select("id, kind, brand, model, serial, tonnage, refrigerant, manufactured_year")
         .eq("unit_id", row.unit_id)
         .is("retired_at", null)
         .order("created_at"),
@@ -360,6 +370,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         serial: string | null
         tonnage: number | string | null
         refrigerant: string | null
+        manufactured_year: number | null
       }[]).map((e) => ({
         id: e.id,
         kind: e.kind,
@@ -368,6 +379,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
         serial: e.serial,
         tons: e.tonnage === null ? null : Number(e.tonnage),
         refrigerant: e.refrigerant,
+        year: e.manufactured_year,
       })),
       signoff: isSignoffRule(contract?.signoff_requirement) ? contract.signoff_requirement : "note_only",
       signoffNotes: contract?.signoff_notes ?? null,
@@ -388,6 +400,7 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
             hasSignature: Boolean(active.signoff_signature_attachment_id),
             syncState: active.sync_state === "pending" ? "pending" : "synced",
             offlineConflict: active.offline_conflict,
+            isReturn: active.visit_type === "return",
           }
         : null,
       selection,
@@ -409,6 +422,12 @@ export async function loadVisit(requestId: string): Promise<VisitLoad> {
           orderNumber: part.order_number ?? "",
           expectedDelivery: part.expected_delivery_date,
           status: part.status,
+          partNumber: part.part_number ?? "",
+          quotedCents: part.quoted_cost_cents,
+          actualCents: part.actual_cost_cents,
+          hasReceipt: Boolean(part.receipt_path),
+          variable: one(one(part.visit_bundle_selections)?.bundles ?? null)?.pricing_kind === "variable",
+          repairTitle: one(part.visit_bundle_selections)?.title_snap ?? null,
         }
       }),
       photoCount,
@@ -624,6 +643,7 @@ type VisitRow = {
   sync_state: string
   offline_conflict: boolean
   visit_seq: number
+  visit_type: string
 }
 
 type PartRow = {
@@ -635,6 +655,14 @@ type PartRow = {
   expected_delivery_date: string | null
   status: string
   suppliers: { name: string; phone: string | null; email: string | null } | { name: string; phone: string | null; email: string | null }[] | null
+  part_number: string | null
+  quoted_cost_cents: number | null
+  actual_cost_cents: number | null
+  receipt_path: string | null
+  visit_bundle_selections:
+    | { title_snap: string; bundles: { pricing_kind: string } | { pricing_kind: string }[] | null }
+    | { title_snap: string; bundles: { pricing_kind: string } | { pricing_kind: string }[] | null }[]
+    | null
 }
 
 type BundleRow = {
