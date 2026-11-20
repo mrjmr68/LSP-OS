@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation"
 import { useState, useTransition } from "react"
 
-import { saveTeamMember } from "@/app/actions/setup"
+import { saveTeamMember, sendTeamInvite } from "@/app/actions/setup"
 import { Field, selectClass, type Notice } from "@/components/setup/form-bits"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -31,6 +31,7 @@ function PersonCard({ person }: { person: SetupTeamMember }) {
   })
   const [notice, setNotice] = useState<Notice>(null)
   const [saving, start] = useTransition()
+  const [inviting, startInvite] = useTransition()
   const set = <K extends keyof TeamInput>(key: K, value: TeamInput[K]) => {
     setForm((f) => ({ ...f, [key]: value }))
     setNotice(null)
@@ -115,6 +116,26 @@ function PersonCard({ person }: { person: SetupTeamMember }) {
         <Button type="submit" size="lg" disabled={saving || !changed}>
           {saving ? "Saving…" : "Save"}
         </Button>
+        {person.isMe || !person.active ? null : (
+          <Button
+            type="button"
+            size="lg"
+            variant="outline"
+            disabled={inviting}
+            onClick={() =>
+              startInvite(async () => {
+                const r = await sendTeamInvite(person.id)
+                setNotice(
+                  r.ok
+                    ? { tone: "ok", text: `Invite sent to ${r.value.email}. The link sets a password and opens the app.` }
+                    : { tone: "error", text: r.message },
+                )
+              })
+            }
+          >
+            {inviting ? "Sending…" : "Send invite"}
+          </Button>
+        )}
         {notice ? (
           <p
             role={notice.tone === "error" ? "alert" : "status"}

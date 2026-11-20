@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 
+import { outboundAllowed } from "@/lib/app-mode"
 import { isSupabaseConfigured } from "@/lib/env"
 import {
   isUuid,
@@ -399,4 +400,33 @@ export async function saveTeamMember(id: string, input: TeamInput): Promise<Setu
   revalidatePath("/setup/team")
   revalidatePath("/board")
   return { ok: true, value: null }
+}
+
+/**
+ * Emails a team member a link to set their password and sign in. It is the
+ * same Supabase email as "Forgot password", landing on the live app's
+ * set-a-password page. Test copies send nothing.
+ */
+export async function sendTeamInvite(id: string): Promise<SetupResult<{ email: string }>> {
+  const ready = await ownerClient()
+  if (!ready.ok) return ready
+  if (!isUuid(id)) return { ok: false, message: "Open the person again." }
+  const { data } = await ready.supabase.from("profiles").select("email, active").eq("id", id).maybeSingle()
+  const person = data as { email: string; active: boolean } | null
+  if (!person?.email?.includes("@")) return { ok: false, message: "This person has no email on file." }
+  if (!person.active) return { ok: false, message: "Turn on “Can sign in” and save first." }
+  if (!outboundAllowed("email")) {
+    return { ok: false, message: "Test copy: no invite was sent. Send it from the live app." }
+  }
+  const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://lsp-os-matt-6243s-projects.vercel.app").replace(/\/$/, "")
+  const { error } = await ready.supabase.auth.resetPasswordForEmail(person.email, {
+    redirectTo: `${site}/auth/callback?next=/account/password`,
+  })
+  if (error) {
+    if (/rate|limit|seconds/i.test(error.message)) {
+      return { ok: false, message: "Supabase only sends a few sign-in emails an hour. Try this one again later." }
+    }
+    return { ok: false, message: "The invite didn't send. Try again." }
+  }
+  return { ok: true, value: { email: person.email } }
 }
