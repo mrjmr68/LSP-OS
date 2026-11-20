@@ -19,6 +19,7 @@ import {
   type VisitStep,
 } from "@/app/actions/visit"
 import { Sheet } from "@/components/board/sheet"
+import { MeterScan } from "@/components/visit/meter-scan"
 import { UnitEquipment } from "@/components/visit/unit-equipment"
 import { useVisitFlush } from "@/components/visit/visit-sync"
 import { Button } from "@/components/ui/button"
@@ -1046,6 +1047,7 @@ function VisitSession({
         {/* ---------------- Readings (its own screen) ---------------- */}
         {step === "readings" ? (
           <section className="flex flex-col gap-3">
+            <MeterScan onValues={(values) => setReadings((current) => ({ ...current, ...values }))} />
             <p className="text-[15px] text-muted-foreground">Saved as you type. Any can be left blank.</p>
             <div className="grid grid-cols-2 gap-3">
               {READING_FIELDS.map((field) => (

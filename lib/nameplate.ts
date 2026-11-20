@@ -63,3 +63,38 @@ export function parseNameplateReply(text: string): NameplateFields | null {
 export function equipmentLabel(e: { model: string | null; serial: string | null }): string {
   return [e.model, e.serial].filter(Boolean).join(" · ")
 }
+
+/** Brands we see in apartment work, grouped by maker. The phone shows a native picker. */
+export const BRAND_GROUPS: { label: string; brands: string[] }[] = [
+  { label: "Goodman family", brands: ["Goodman", "Amana", "Daikin"] },
+  { label: "Rheem family", brands: ["Rheem", "Ruud", "WeatherKing"] },
+  { label: "ICP", brands: ["Heil", "Tempstar", "Comfortmaker", "Arcoaire", "Day & Night", "KeepRite"] },
+  { label: "Carrier family", brands: ["Carrier", "Bryant", "Payne"] },
+  { label: "Trane family", brands: ["Trane", "American Standard"] },
+  { label: "Lennox family", brands: ["Lennox", "Ducane"] },
+  { label: "York family", brands: ["York", "Coleman", "Luxaire"] },
+  { label: "Nortek", brands: ["Frigidaire", "Gibson", "Maytag", "Westinghouse", "Intertherm", "Miller"] },
+]
+
+export const TON_OPTIONS = ["1.5", "2", "2.5", "3", "3.5", "4", "5"]
+export const REFRIGERANT_OPTIONS = ["R-410A", "R-454B", "R-32", "R-22", "R-407C"]
+
+const ALL_BRANDS = BRAND_GROUPS.flatMap((g) => g.brands)
+
+/** What the plate says → one of our brands ("GOODMAN MFG" → Goodman, "ICP" stays "ICP"). */
+export function matchBrand(text: string | null): string | null {
+  if (!text) return null
+  const t = text.toLowerCase().replace(/[^a-z& ]/g, " ")
+  const hit = ALL_BRANDS.find((b) => t.includes(b.toLowerCase()))
+  if (hit) return hit
+  if (/\bicp\b|international comfort/.test(t)) return "ICP"
+  return text.trim().slice(0, 40)
+}
+
+/** "R410A", "r-410a", "HFC-410A" → "R-410A" when it's one we list. */
+export function matchRefrigerant(text: string | null): string | null {
+  if (!text) return null
+  const digits = text.toUpperCase().replace(/[^0-9A-Z]/g, "").replace(/^(R|HFC|HCFC)/, "")
+  const hit = REFRIGERANT_OPTIONS.find((r) => r.replace("R-", "") === digits)
+  return hit ?? text.trim().slice(0, 20)
+}
