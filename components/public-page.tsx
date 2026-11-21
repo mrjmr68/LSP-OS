@@ -10,13 +10,14 @@ export function PublicPage({
 }) {
   return (
     <main className="min-h-full">
-      <div className="bg-primary px-4 py-6 text-primary-foreground">
-        <p className="font-display text-4xl leading-none font-bold tracking-wide">
-          LSP
-        </p>
-        <p className="mt-2 text-sm text-primary-foreground/80">
-          Legend Service Pros · HVAC service for apartment communities
-        </p>
+      <div className="border-b-4 border-[#f1e3c8] bg-card px-4 py-5">
+        <div className="mx-auto w-full max-w-md">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a static SVG logo */}
+          <img src="/brand/lsp-logo.svg" alt="Legend Service Pros" width={176} height={51} className="h-auto w-44" />
+          <p className="mt-2 text-sm text-muted-foreground">
+            Legend Service Pros · HVAC service for apartment communities
+          </p>
+        </div>
       </div>
       <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-8">
         <h1 className="font-display text-3xl font-semibold tracking-wide">

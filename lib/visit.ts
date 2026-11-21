@@ -38,6 +38,9 @@ export type Readings = {
   liquid: string
   suctionLine: string
   liquidLine: string
+  /** Refrigerant added on this visit (Nov 20): the pounds are what's charged. */
+  refrigerantType: string
+  refrigerantLbs: string
 }
 
 export const emptyReadings = (): Readings => ({
@@ -47,6 +50,8 @@ export const emptyReadings = (): Readings => ({
   liquid: "",
   suctionLine: "",
   liquidLine: "",
+  refrigerantType: "",
+  refrigerantLbs: "",
 })
 
 export const READING_FIELDS: { key: keyof Readings; label: string; unit: string }[] = [
@@ -59,7 +64,18 @@ export const READING_FIELDS: { key: keyof Readings; label: string; unit: string 
 ]
 
 export function readingsCount(readings: Readings): number {
-  return Object.values(readings).filter((v) => v.trim() !== "").length
+  // The type alone isn't a reading; it's prefilled from the unit.
+  return (Object.keys(readings) as (keyof Readings)[]).filter(
+    (k) => k !== "refrigerantType" && (readings[k] ?? "").trim() !== "",
+  ).length
+}
+
+/** Pounds as typed: blank, or a number from 0 to 200 with up to two decimals. */
+export function refrigerantLbsError(value: string): string | null {
+  const v = value.trim()
+  if (v === "") return null
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(v) || Number(v) > 200) return "Pounds as a number, like 4 or 2.5."
+  return null
 }
 
 export function isClosePath(value: string | null | undefined): value is ClosePath {

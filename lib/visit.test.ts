@@ -7,12 +7,15 @@ import {
   closeGaps,
   departureBlocked,
   emptyDraft,
+  emptyReadings,
   formatDollars,
   getVisitQueueServerSnapshot,
   pathAfterBundle,
   readVisitDraft,
+  readingsCount,
   readVisitQueue,
   reduceQueue,
+  refrigerantLbsError,
   syncLabel,
   withinGeofence,
   writeVisitDraft,
@@ -185,4 +188,19 @@ test("queue flush drops a conflicting call and retries the rest later", () => {
   assert.equal(retry.items[0]?.id, "3")
   const done = reduceQueue(retry.items, "ok")
   assert.deepEqual(done.items, [])
+})
+
+test("refrigerant pounds: blank or 0–200 with up to two decimals", () => {
+  assert.equal(refrigerantLbsError(""), null)
+  assert.equal(refrigerantLbsError("4"), null)
+  assert.equal(refrigerantLbsError("2.5"), null)
+  assert.equal(refrigerantLbsError("12.25"), null)
+  assert.notEqual(refrigerantLbsError("2.555"), null)
+  assert.notEqual(refrigerantLbsError("four"), null)
+  assert.notEqual(refrigerantLbsError("250"), null)
+})
+
+test("the refrigerant type alone doesn't count as a reading", () => {
+  assert.equal(readingsCount({ ...emptyReadings(), refrigerantType: "R-410A" }), 0)
+  assert.equal(readingsCount({ ...emptyReadings(), refrigerantType: "R-410A", refrigerantLbs: "3" }), 1)
 })

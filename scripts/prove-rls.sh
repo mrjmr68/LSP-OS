@@ -96,3 +96,7 @@ echo "Parts return proof passed."
 echo "Running estimates proof"
 run_sql "$root/supabase/tests/estimates_proof.sql"
 echo "Estimates proof passed."
+
+echo "Running refrigerant proof"
+run_sql "$root/supabase/tests/refrigerant_proof.sql"
+echo "Refrigerant proof passed."

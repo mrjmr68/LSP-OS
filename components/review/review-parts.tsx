@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 
+import { REFRIGERANT_OPTIONS } from "@/lib/nameplate"
 import {
   minutesShort,
   money,
@@ -9,6 +10,7 @@ import {
   type ReviewCostLine,
   type ReviewLine,
 } from "@/lib/review"
+import type { InvoiceRefrigerant } from "@/lib/review-data"
 
 // Pieces shared by the invoice and estimate review screens.
 
@@ -357,3 +359,116 @@ export function LineCard({
     </div>
   )
 }
+
+const lbsText = (n: number) => `${Number.isInteger(n) ? n : n.toFixed(2).replace(/0$/, "")} lb`
+
+/** Refrigerant added on the visit. The tech's pounds are what's charged; an owner can correct them. */
+export function RefrigerantCard({
+  refrigerant,
+  techFirstName,
+  readOnly,
+  onSave,
+  onError,
+}: {
+  refrigerant: InvoiceRefrigerant
+  techFirstName: string
+  readOnly: boolean
+  onSave: (type: string, lbs: number) => void
+  onError: (text: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [type, setType] = useState(refrigerant.type ?? "R-410A")
+  const [lbs, setLbs] = useState(refrigerant.lbs === null ? "" : String(refrigerant.lbs))
+  const { lbs: entered, bookLbs, charged } = refrigerant
+  if (entered === null && bookLbs === 0 && readOnly) return null
+
+  const who = techFirstName === "the tech" ? "Tech" : techFirstName
+  const summary =
+    entered === null
+      ? bookLbs > 0
+        ? `None entered. The price book's ${lbsText(bookLbs)} is charged.`
+        : "None added."
+      : `${refrigerant.type ?? "Refrigerant"} · ${lbsText(entered)} added`
+  const diff = entered !== null && charged ? entered - bookLbs : 0
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border bg-card px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[13px] font-bold tracking-[0.06em] text-muted-foreground">REFRIGERANT</p>
+          <p className="text-[17px] font-bold">{summary}</p>
+          {entered !== null && charged && bookLbs > 0 ? (
+            <p className="text-[14px] text-muted-foreground">
+              Price book had {lbsText(bookLbs)}
+              {diff !== 0 ? ` · ${diff > 0 ? "+" : "−"}${lbsText(Math.abs(diff))}, the price follows` : ""}
+            </p>
+          ) : null}
+          {entered !== null && !charged ? (
+            <p className="text-[14px] text-free-foreground">
+              No repair here includes refrigerant, so it&apos;s recorded, not charged. Add a line to charge it.
+            </p>
+          ) : null}
+          {entered !== null ? (
+            <p className="text-[13px] text-muted-foreground">Entered by {who}; prints on the invoice.</p>
+          ) : null}
+        </div>
+        {!readOnly && !editing ? (
+          <button type="button" className={smallButton + " h-10 shrink-0"} onClick={() => setEditing(true)}>
+            {entered === null ? "Enter" : "Change"}
+          </button>
+        ) : null}
+      </div>
+      {editing ? (
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1 text-sm font-bold">
+              Type
+              <select
+                className={inputClass}
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+              >
+                {[...new Set([...REFRIGERANT_OPTIONS, type])].map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-bold">
+              Pounds added
+              <input
+                className={inputClass}
+                inputMode="decimal"
+                value={lbs}
+                onChange={(e) => setLbs(e.target.value)}
+                placeholder={bookLbs ? String(bookLbs) : "0"}
+              />
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className={smallButton + " h-11 flex-1"} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="h-11 flex-1 rounded-lg bg-primary text-[15px] font-bold text-primary-foreground"
+              onClick={() => {
+                const n = Number(lbs.trim())
+                if (lbs.trim() === "" || !Number.isFinite(n) || n < 0 || n > 200) {
+                  onError("Type the pounds added, like 4 or 2.5.")
+                  return
+                }
+                onSave(type, n)
+                setEditing(false)
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
