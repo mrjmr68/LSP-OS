@@ -12,6 +12,7 @@ import {
   removeLine,
   sendAgain,
   setCostLine,
+  setInvoiceRefrigerant,
   updateLine,
   type ReviewResult,
 } from "@/app/actions/review"
@@ -25,7 +26,7 @@ import {
   ratePercent,
 } from "@/lib/review"
 
-import { inputClass, LineCard, Panel, Row, smallButton, TimeTiles } from "./review-parts"
+import { inputClass, LineCard, Panel, RefrigerantCard, Row, smallButton, TimeTiles } from "./review-parts"
 
 type Notice = { tone: "ok" | "error"; text: string } | null
 
@@ -297,6 +298,14 @@ export function InvoiceReview({ model }: { model: Model }) {
               Add a line
             </button>
           )}
+
+          <RefrigerantCard
+            refrigerant={model.refrigerant}
+            techFirstName={first}
+            readOnly={readOnly}
+            onSave={(type, lbs) => run(() => setInvoiceRefrigerant(model.id, type, lbs))}
+            onError={(text) => setNotice({ tone: "error", text })}
+          />
 
           <div className="flex flex-col gap-1 rounded-xl border border-border bg-card px-4 py-3">
             <Row label="Subtotal" value={moneyExact(model.subtotalCents)} />

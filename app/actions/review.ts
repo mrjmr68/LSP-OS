@@ -177,3 +177,25 @@ export async function sendAgain(invoiceId: string): Promise<ReviewResult> {
   const message = await sendInvoiceEmail(ready.supabase, invoiceId)
   return done(invoiceId, message)
 }
+
+/** The owner corrects the refrigerant type and pounds; the price follows. */
+export async function setInvoiceRefrigerant(
+  invoiceId: string,
+  refrigerantType: string,
+  lbs: number,
+): Promise<ReviewResult> {
+  const ready = await ownerClient()
+  if (!ready.ok) return ready
+  if (!isUuid(invoiceId)) return { ok: false, message: "Reload the invoice." }
+  if (!Number.isFinite(lbs) || lbs < 0 || lbs > 200) return { ok: false, message: "Enter the pounds added (0 to 200)." }
+  const { error } = await ready.supabase.rpc("set_invoice_refrigerant", {
+    invoice_id: invoiceId,
+    refrigerant_type: refrigerantType.trim() || null,
+    lbs: Math.round(lbs * 100) / 100,
+  })
+  if (error) return { ok: false, message: friendly(error.message) }
+  revalidatePath("/review", "layout")
+  revalidatePath(`/review/invoice/${invoiceId}`)
+  return { ok: true, message: null }
+}
+

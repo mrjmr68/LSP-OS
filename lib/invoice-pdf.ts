@@ -2,6 +2,8 @@ import "server-only"
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib"
 
+import { BRAND_TAN, LOGO_HEIGHT, LOGO_OFFSET, LOGO_PATHS, LOGO_WIDTH } from "@/lib/brand-logo"
+
 import { longDate, moneyExact, ratePercent } from "@/lib/review"
 import { createClient } from "@/lib/supabase/server"
 
@@ -28,6 +30,11 @@ export type InvoiceDocument = {
   narrative?: string | null
   equipmentSize?: string | null
   link?: string | null
+  /** yyyy-mm-dd the work was done, and who did it. */
+  serviceDate?: string | null
+  techName?: string | null
+  /** e.g. "R-410A · 10 lb" — printed as a record under the lines. */
+  refrigerant?: string | null
 }
 
 export const COMPANY = {
@@ -42,7 +49,7 @@ export async function loadInvoiceDocument(supabase: Supabase, id: string): Promi
   const { data } = await supabase
     .from("invoice_records")
     .select(
-      "number, invoice_date, due_date, terms_days_snap, bill_to_customer_id, bill_to_contact_id, bill_to_email_snap, property_snap, unit_snap, subtotal_cents, tax_rate_bps_snap, tax_cents, total_cents, request_id",
+      "number, invoice_date, due_date, terms_days_snap, bill_to_customer_id, bill_to_contact_id, bill_to_email_snap, property_snap, unit_snap, subtotal_cents, tax_rate_bps_snap, tax_cents, total_cents, request_id, refrigerant_type, refrigerant_lbs",
     )
     .eq("id", id)
     .maybeSingle()
@@ -61,6 +68,8 @@ export async function loadInvoiceDocument(supabase: Supabase, id: string): Promi
     tax_cents: number
     total_cents: number
     request_id: string
+    refrigerant_type: string | null
+    refrigerant_lbs: number | string | null
   } | null
   if (!inv || !inv.number || !inv.invoice_date || !inv.due_date) return null
 
@@ -70,14 +79,36 @@ export async function loadInvoiceDocument(supabase: Supabase, id: string): Promi
     supabase.from("customer_contacts").select("name").eq("id", inv.bill_to_contact_id).maybeSingle(),
     supabase
       .from("service_requests")
-      .select("properties ( address_line1, city, state, zip )")
+      .select("assigned_user_id, properties ( address_line1, city, state, zip )")
       .eq("id", inv.request_id)
       .maybeSingle(),
   ])
   type Prop = { address_line1: string; city: string; state: string; zip: string }
-  const propRaw = (request.data as { properties: Prop | Prop[] | null } | null)?.properties
+  const req = request.data as { assigned_user_id: string | null; properties: Prop | Prop[] | null } | null
+  const propRaw = req?.properties
   const prop = Array.isArray(propRaw) ? propRaw[0] : propRaw
+  const [visit, tech] = await Promise.all([
+    supabase
+      .from("service_visits")
+      .select("closed_at")
+      .eq("request_id", inv.request_id)
+      .eq("status", "closed")
+      .order("visit_seq", { ascending: false })
+      .limit(1),
+    req?.assigned_user_id
+      ? supabase.from("profiles").select("full_name").eq("id", req.assigned_user_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+  const closedAt = ((visit.data ?? []) as { closed_at: string | null }[])[0]?.closed_at ?? null
+  const techName = (tech.data as { full_name: string } | null)?.full_name ?? null
+  const lbs = inv.refrigerant_lbs === null ? null : Number(inv.refrigerant_lbs)
   return {
+    serviceDate: closedAt ? nyDate(closedAt) : null,
+    techName: techName ? techName.replace(/\b\w/g, (c) => c.toUpperCase()) : null,
+    refrigerant:
+      lbs !== null && lbs > 0
+        ? `${inv.refrigerant_type ?? "Refrigerant"} · ${Number.isInteger(lbs) ? lbs : lbs.toFixed(2).replace(/0$/, "")} lb`
+        : null,
     number: inv.number,
     invoiceDate: inv.invoice_date,
     dueDate: inv.due_date,
@@ -210,122 +241,185 @@ function wrap(text: string, font: PDFFont, size: number, width: number): string[
   return out.length ? out : [""]
 }
 
+const hex = (h: string) =>
+  rgb(parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255)
+
+/** The LSP logo with its top-left corner at (x, top), `width` points wide. */
+function drawLogo(page: PDFPage, x: number, top: number, width: number) {
+  const s = width / LOGO_WIDTH
+  for (const p of LOGO_PATHS) {
+    page.drawSvgPath(p.d, {
+      x: x + LOGO_OFFSET.x * s,
+      y: top - LOGO_OFFSET.y * s,
+      scale: s,
+      color: hex(p.fill),
+      ...(p.stroke ? { borderColor: hex(p.stroke), borderWidth: p.strokeWidth } : {}),
+    })
+  }
+  return (LOGO_HEIGHT * width) / LOGO_WIDTH
+}
+
 export async function renderInvoicePdf(doc: InvoiceDocument): Promise<Uint8Array> {
   const pdf = await PDFDocument.create()
   const estimate = doc.kind === "estimate"
-  pdf.setTitle(`${estimate ? "Estimate" : "Invoice"} ${doc.number}`)
+  const title = estimate ? "Estimate" : "Invoice"
+  pdf.setTitle(`${title} ${doc.number}`)
   pdf.setAuthor(COMPANY.name)
+  pdf.setCreator(COMPANY.name)
   const regular = await pdf.embedFont(StandardFonts.Helvetica)
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold)
   const ink = rgb(0.067, 0.082, 0.094)
-  const grey = rgb(0.29, 0.33, 0.38)
-  const rule = rgb(0.84, 0.85, 0.83)
+  const grey = rgb(0.36, 0.39, 0.43)
+  const rule = rgb(0.85, 0.85, 0.83)
+  const tan = hex(BRAND_TAN)
+  const tanLight = rgb(0.985, 0.965, 0.925)
 
   const W = 612
   const H = 792
-  const M = 54
+  const M = 48
+  const pages: PDFPage[] = []
   let page: PDFPage = pdf.addPage([W, H])
+  pages.push(page)
   let y = H - M
 
   const text = (s: string, x: number, yy: number, size = 10, font = regular, color = ink) =>
     page.drawText(plain(s), { x, y: yy, size, font, color })
   const right = (s: string, xr: number, yy: number, size = 10, font = regular, color = ink) =>
     text(s, xr - font.widthOfTextAtSize(plain(s), size), yy, size, font, color)
+  const label = (s: string, x: number, yy: number) => text(s.toUpperCase(), x, yy, 7.5, bold, grey)
 
-  // Header
-  text(COMPANY.name, M, y - 4, 16, bold)
-  const companyLines = [COMPANY.address, COMPANY.phone, COMPANY.email].filter(Boolean)
-  companyLines.forEach((l, i) => text(l, M, y - 22 - i * 13, 10, regular, grey))
-  right(estimate ? "ESTIMATE" : "INVOICE", W - M, y - 4, 20, bold)
+  // ---- Header: logo and company on the left, the document on the right.
+  const logoH = drawLogo(page, M, y, 168)
+  const companyLines = [COMPANY.name, COMPANY.address, [COMPANY.phone, COMPANY.email].filter(Boolean).join("  ·  ")]
+    .filter(Boolean)
+  companyLines.forEach((l, i) => text(l, M, y - logoH - 16 - i * 12, i === 0 ? 9.5 : 9, i === 0 ? bold : regular, i === 0 ? ink : grey))
+
+  right(title.toUpperCase(), W - M, y - 22, 26, bold)
+  right(`No. ${doc.number}`, W - M, y - 40, 11, bold, grey)
   const meta: [string, string][] = estimate
     ? ([
-        ["Estimate", doc.number],
         ["Date", longDate(doc.invoiceDate)],
         doc.equipmentSize ? ["Equipment", doc.equipmentSize] : null,
+        doc.techName ? ["Prepared by", doc.techName] : null,
       ].filter(Boolean) as [string, string][])
-    : [
-        ["Invoice", doc.number],
-        ["Date", longDate(doc.invoiceDate)],
+    : ([
+        ["Invoice date", longDate(doc.invoiceDate)],
         ["Due", longDate(doc.dueDate)],
         ["Terms", doc.termsDays === 0 ? "Due on receipt" : `Net ${doc.termsDays}`],
-      ]
+        doc.serviceDate ? ["Service date", longDate(doc.serviceDate)] : null,
+        doc.techName ? ["Technician", doc.techName] : null,
+      ].filter(Boolean) as [string, string][])
   meta.forEach(([k, v], i) => {
-    right(v, W - M, y - 24 - i * 14, 10, bold)
-    right(k, W - M - 130, y - 24 - i * 14, 10, regular, grey)
+    right(v, W - M, y - 60 - i * 13, 9.5, bold)
+    right(k, W - M - 118, y - 60 - i * 13, 9.5, regular, grey)
   })
-  y -= 24 + meta.length * 14 + 24
+  const headerBottom = Math.min(y - logoH - 16 - companyLines.length * 12, y - 60 - meta.length * 13) - 8
+  y = headerBottom
+  page.drawRectangle({ x: M, y: y - 3, width: W - M * 2, height: 3, color: tan })
+  page.drawLine({ start: { x: M, y: y - 3 }, end: { x: W - M, y: y - 3 }, thickness: 0.75, color: ink })
+  y -= 26
 
-  // Bill to / service location
-  const col2 = M + 260
-  text(estimate ? "PREPARED FOR" : "BILL TO", M, y, 8, bold, grey)
-  text("SERVICE LOCATION", col2, y, 8, bold, grey)
+  // ---- Who and where.
+  const col2 = M + (W - M * 2) / 2 + 8
+  label(estimate ? "Prepared for" : "Bill to", M, y)
+  label("Service location", col2, y)
   y -= 14
   const billLines = [doc.customerName, doc.contactName, doc.billEmail].filter((l): l is string => Boolean(l))
-  const siteLines = [`${doc.propertyName} · Unit ${doc.unitLabel}`, doc.address].filter(Boolean)
+  const siteLines = [doc.propertyName, `Unit ${doc.unitLabel}`, doc.address].filter(Boolean)
   const rows = Math.max(billLines.length, siteLines.length)
   for (let i = 0; i < rows; i += 1) {
-    if (billLines[i]) text(billLines[i], M, y - i * 14, 10, i === 0 ? bold : regular)
-    if (siteLines[i]) text(siteLines[i], col2, y - i * 14, 10, i === 0 ? bold : regular)
+    if (billLines[i]) text(billLines[i], M, y - i * 13, 10, i === 0 ? bold : regular)
+    if (siteLines[i]) text(siteLines[i], col2, y - i * 13, 10, i === 0 ? bold : regular)
   }
-  y -= rows * 14 + 22
+  y -= rows * 13 + 18
 
-  // An estimate says why first.
+  // ---- An estimate says what we found first.
   if (estimate && doc.narrative) {
-    text("WHAT WE FOUND", M, y, 8, bold, grey)
-    y -= 14
-    const reason = wrap(doc.narrative, regular, 10, W - M * 2)
-    reason.forEach((w, i) => text(w, M, y - i * 13, 10))
-    y -= reason.length * 13 + 18
+    const reason = wrap(doc.narrative, regular, 10, W - M * 2 - 24)
+    const boxH = reason.length * 13 + 30
+    page.drawRectangle({ x: M, y: y - boxH + 12, width: W - M * 2, height: boxH, color: tanLight, borderColor: tan, borderWidth: 1 })
+    label("What we found", M + 12, y - 2)
+    reason.forEach((w, i) => text(w, M + 12, y - 18 - i * 13, 10))
+    y -= boxH + 10
   }
 
-  // Lines
-  const amountX = W - M
-  const descWidth = W - M * 2 - 110
-  const header = () => {
-    page.drawRectangle({ x: M, y: y - 6, width: W - M * 2, height: 20, color: rgb(0.953, 0.957, 0.945) })
-    text("DESCRIPTION", M + 8, y, 8, bold, grey)
-    right("AMOUNT", amountX - 8, y, 8, bold, grey)
-    y -= 24
+  // ---- Lines.
+  const amountX = W - M - 10
+  const descWidth = W - M * 2 - 130
+  const tableHeader = () => {
+    page.drawRectangle({ x: M, y: y - 7, width: W - M * 2, height: 22, color: tan })
+    text(estimate ? "PROPOSED WORK" : "WORK PERFORMED", M + 10, y, 8, bold)
+    right("AMOUNT", amountX, y, 8, bold)
+    y -= 26
   }
-  header()
+  const newPage = () => {
+    page = pdf.addPage([W, H])
+    pages.push(page)
+    y = H - M
+    drawLogo(page, M, y, 84)
+    right(`${title} ${doc.number} (continued)`, W - M, y - 14, 9.5, bold, grey)
+    y -= 44
+  }
+  tableHeader()
   for (const line of doc.lines) {
     const wrapped = wrap(line.description, regular, 10, descWidth)
-    const need = wrapped.length * 13 + 10
-    if (y - need < M + 90) {
-      page = pdf.addPage([W, H])
-      y = H - M
-      header()
+    const need = wrapped.length * 13 + 12
+    if (y - need < M + 110) {
+      newPage()
+      tableHeader()
     }
-    wrapped.forEach((w, i) => text(w, M + 8, y - i * 13, 10))
-    right(moneyExact(line.amountCents), amountX - 8, y, 10)
-    y -= wrapped.length * 13 + 4
-    page.drawLine({ start: { x: M, y: y }, end: { x: W - M, y: y }, thickness: 0.5, color: rule })
+    wrapped.forEach((w, i) => text(w, M + 10, y - i * 13, 10))
+    right(moneyExact(line.amountCents), amountX, y, 10, line.amountCents < 0 ? regular : bold)
+    y -= wrapped.length * 13 + 5
+    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.5, color: rule })
     y -= 14
   }
 
-  // Totals
-  const labelX = W - M - 200
-  const totals: [string, string, boolean][] = [
-    ["Subtotal", moneyExact(doc.subtotalCents), false],
-    [`Sales tax (${ratePercent(doc.taxRateBps)})`, moneyExact(doc.taxCents), false],
-    [estimate ? "Estimate total" : "Total due", moneyExact(doc.totalCents), true],
-  ]
-  y -= 4
-  for (const [label, value, strong] of totals) {
-    text(label, labelX, y, strong ? 12 : 10, strong ? bold : regular, strong ? ink : grey)
-    right(value, amountX - 8, y, strong ? 12 : 10, strong ? bold : regular)
-    y -= strong ? 20 : 15
+  if (doc.refrigerant) {
+    text(`Refrigerant added: ${doc.refrigerant}`, M + 10, y, 9, regular, grey)
+    y -= 16
   }
 
+  // ---- Totals, the last one highlighted.
+  if (y < M + 120) newPage()
+  const boxX = W - M - 230
+  y -= 2
+  text("Subtotal", boxX + 10, y, 10, regular, grey)
+  right(moneyExact(doc.subtotalCents), amountX, y, 10)
+  y -= 15
+  text(`Sales tax (${ratePercent(doc.taxRateBps)})`, boxX + 10, y, 10, regular, grey)
+  right(moneyExact(doc.taxCents), amountX, y, 10)
+  y -= 12
+  page.drawRectangle({ x: boxX, y: y - 22, width: W - M - boxX, height: 28, color: ink })
+  text(estimate ? "Estimate total" : "Total due", boxX + 10, y - 13, 12, bold, rgb(1, 1, 1))
+  right(moneyExact(doc.totalCents), amountX, y - 13, 13, bold, tan)
+  y -= 44
+
+  // ---- What happens next.
   if (estimate) {
-    const contact = [COMPANY.phone, COMPANY.email].filter(Boolean).join(" · ")
     if (doc.link) {
-      text("To approve or decline this estimate, open:", M, M + 28, 10, bold)
-      text(doc.link, M, M + 14, 9, regular, grey)
+      text("To approve or decline this estimate, open:", M, y, 10, bold)
+      text(doc.link, M, y - 14, 9, regular, grey)
+      y -= 32
     }
-    text(contact ? `Questions? ${contact}` : "Questions? Reply to the email this came with.", M, M, 10, regular, grey)
   } else {
-    text("Thank you for your business.", M, M, 10, regular, grey)
+    text(
+      doc.termsDays === 0 ? "Payment is due on receipt." : `Payment is due by ${longDate(doc.dueDate)} (net ${doc.termsDays}).`,
+      M,
+      y,
+      10,
+      bold,
+    )
+    text(`Please reference invoice ${doc.number} with your payment. Thank you for your business.`, M, y - 14, 9, regular, grey)
   }
+
+  // ---- Footer on every page.
+  const contact = [COMPANY.name, COMPANY.phone, COMPANY.email].filter(Boolean).join("  ·  ")
+  pages.forEach((p, i) => {
+    p.drawLine({ start: { x: M, y: M - 4 }, end: { x: W - M, y: M - 4 }, thickness: 0.5, color: rule })
+    p.drawText(plain(contact), { x: M, y: M - 18, size: 8, font: regular, color: grey })
+    const n = `Page ${i + 1} of ${pages.length}`
+    p.drawText(n, { x: W - M - regular.widthOfTextAtSize(n, 8), y: M - 18, size: 8, font: regular, color: grey })
+  })
   return pdf.save()
 }

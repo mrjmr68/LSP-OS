@@ -26,12 +26,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { mapsDirectionsUrl, runGoEnRoute } from "@/lib/board-rules"
 import { fixNow, locationState, onFix, startLocation } from "@/lib/location"
-import { ageCheck, equipmentLabel, isSealedSystemRepair } from "@/lib/nameplate"
+import { ageCheck, equipmentLabel, isSealedSystemRepair, REFRIGERANT_OPTIONS } from "@/lib/nameplate"
 import type { VisitBundle, VisitModel, VisitSelection, VisitSupplier } from "@/lib/visit-data"
 import {
   ATTEMPT_REASONS,
   READING_FIELDS,
   readingsCount,
+  refrigerantLbsError,
   attemptGaps,
   clearVisitDraft,
   closeGaps,
@@ -210,6 +211,11 @@ function VisitSession({
   // The work trip after an approved estimate: no re-diagnosis, no new estimate.
   const doingApproved = isReturn && model.approvedEstimate !== null
   const installing = isReturn && (partInHand || doingApproved)
+  // Refrigerant type defaults to what's on the unit's equipment (outdoor first).
+  const unitRefrigerant =
+    model.equipment.find((e) => e.refrigerant && e.kind !== "ahu")?.refrigerant ??
+    model.equipment.find((e) => e.refrigerant)?.refrigerant ??
+    "R-410A"
   const partRepairs = installing ? [] : picks.filter((p) => p.oneShot)
   const partText = partDescription.trim() || partRepairs.map((p) => p.title).join("; ")
   const pickTotal = picks.reduce((sum, p) => sum + p.priceCents, 0)
@@ -256,6 +262,7 @@ function VisitSession({
     photoCount: model.photoCount + photos.length,
     partDescription: partText,
   })
+  if (refrigerantLbsError(readings.refrigerantLbs ?? "")) gaps.push("Fix the refrigerant pounds on Readings.")
 
   useEffect(() => {
     if (!hydrated.current) {
@@ -1016,6 +1023,52 @@ function VisitSession({
                 </label>
               ))}
             </div>
+
+            <div className="mt-2 flex flex-col gap-2 rounded-xl border-2 border-ink/15 bg-card p-3">
+              <p className="text-[17px] font-bold">Refrigerant added</p>
+              <p className="text-[14px] leading-5 text-muted-foreground">
+                The pounds you enter are what the property is charged. Leave blank if you added none.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[15px] font-semibold">Type</span>
+                  <select
+                    value={readings.refrigerantType || unitRefrigerant}
+                    onChange={(event) => setReadings({ ...readings, refrigerantType: event.target.value })}
+                    className="h-14 rounded-xl border-2 border-ink/70 bg-card px-3 text-lg"
+                  >
+                    {[...new Set([...REFRIGERANT_OPTIONS, readings.refrigerantType || unitRefrigerant])].map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[15px] font-semibold">Pounds</span>
+                  <span className="flex items-center gap-2">
+                    <Input
+                      inputMode="decimal"
+                      value={readings.refrigerantLbs ?? ""}
+                      onChange={(event) =>
+                        setReadings({
+                          ...readings,
+                          refrigerantLbs: event.target.value,
+                          refrigerantType: readings.refrigerantType || unitRefrigerant,
+                        })
+                      }
+                      className="h-14 rounded-xl border-2 border-ink/70 text-xl tabular-nums"
+                    />
+                    <span className="w-8 shrink-0 text-[15px] text-muted-foreground">lb</span>
+                  </span>
+                </label>
+              </div>
+              {refrigerantLbsError(readings.refrigerantLbs ?? "") ? (
+                <p className="text-[14px] font-semibold text-destructive">
+                  {refrigerantLbsError(readings.refrigerantLbs ?? "")}
+                </p>
+              ) : null}
+            </div>
           </section>
         ) : null}
 
@@ -1721,7 +1774,10 @@ function fieldsFrom(model: VisitModel, draft: VisitDraft | null) {
     serial: draft?.serial || model.visit?.serial || "",
     equipmentSize: draft?.equipmentSize || model.visit?.equipmentSize || "",
     note: draft?.note || model.visit?.note || "",
-    readings: draft?.readings?.returnAir !== undefined ? draft.readings : model.visit?.readings ?? emptyReadings(),
+    readings:
+      draft?.readings?.returnAir !== undefined
+        ? { ...emptyReadings(), ...draft.readings }
+        : model.visit?.readings ?? emptyReadings(),
     signoffName: draft?.signoffName || model.visit?.signoffName || "",
     signature: draft?.signatureDataUrl ?? null,
     narrative: draft?.oneOffNarrative || "",

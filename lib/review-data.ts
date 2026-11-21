@@ -249,13 +249,24 @@ export type InvoiceReview = {
   dueDate: string | null
   sentAt: string | null
   emailStatus: "sent" | "failed" | "queued" | null
+  refrigerant: InvoiceRefrigerant
+}
+
+/** Refrigerant added on the visit, and what the price book had built in. */
+export type InvoiceRefrigerant = {
+  type: string | null
+  lbs: number | null
+  /** Pounds built into the repairs on this invoice. */
+  bookLbs: number
+  /** False when no repair on the invoice carries refrigerant: recorded, not charged. */
+  charged: boolean
 }
 
 export async function loadInvoiceReview(supabase: Supabase, id: string): Promise<InvoiceReview | null> {
   const { data: invData } = await supabase
     .from("invoice_records")
     .select(
-      "id, request_id, status, number, updated_at, created_at, property_snap, unit_snap, subtotal_cents, tax_rate_bps_snap, tax_cents, total_cents, terms_days_snap, bill_to_customer_id, bill_to_email_snap, tech_one_off_narrative, materials_text, flag_question, flag_answer, flag_asked_at, invoice_date, due_date, sent_at",
+      "id, request_id, status, number, updated_at, created_at, property_snap, unit_snap, subtotal_cents, tax_rate_bps_snap, tax_cents, total_cents, terms_days_snap, bill_to_customer_id, bill_to_email_snap, tech_one_off_narrative, materials_text, flag_question, flag_answer, flag_asked_at, invoice_date, due_date, sent_at, refrigerant_type, refrigerant_lbs",
     )
     .eq("id", id)
     .maybeSingle()
@@ -284,6 +295,8 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
     invoice_date: string | null
     due_date: string | null
     sent_at: string | null
+    refrigerant_type: string | null
+    refrigerant_lbs: number | string | null
   }
 
   const [linesResult, costsResult, requestResult, visitsResult, customerResult, names, emailResult] =
@@ -448,8 +461,34 @@ export async function loadInvoiceReview(supabase: Supabase, id: string): Promise
 
   const techName = request?.assigned_user_id ? (names.get(request.assigned_user_id) ?? null) : null
   const email = ((emailResult.data ?? []) as { status: "sent" | "failed" | "queued" }[])[0]
+
+  // What the price book had built in, for comparison with the pounds entered.
+  const bundleIds = ((linesResult.data ?? []) as unknown as LineRow[])
+    .map((row) => {
+      const sel = Array.isArray(row.visit_bundle_selections) ? row.visit_bundle_selections[0] : row.visit_bundle_selections
+      return sel?.bundle_id ?? null
+    })
+    .filter((v): v is string => Boolean(v))
+  let bookLbs = 0
+  if (bundleIds.length) {
+    const { data: refLines } = await supabase
+      .from("bundle_lines")
+      .select("bundle_id, qty")
+      .eq("kind", "refrigerant")
+      .in("bundle_id", bundleIds)
+    const perBundle = new Map(((refLines ?? []) as { bundle_id: string; qty: number | string }[]).map((r) => [r.bundle_id, Number(r.qty)]))
+    bookLbs = bundleIds.reduce((sum, b) => sum + (perBundle.get(b) ?? 0), 0)
+  }
+  const refrigerant: InvoiceRefrigerant = {
+    type: inv.refrigerant_type,
+    lbs: inv.refrigerant_lbs === null ? null : Number(inv.refrigerant_lbs),
+    bookLbs,
+    charged: lines.some((l) => l.costLines.some((c) => c.kind === "refrigerant")),
+  }
+
   return {
     id: inv.id,
+    refrigerant,
     requestId: inv.request_id,
     status: inv.status,
     number: inv.number,
